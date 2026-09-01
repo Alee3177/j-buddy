@@ -34,7 +34,7 @@ import { DirectLlmApiService } from '../scripts/directLlmApiService.js';
 import { normalizeModelCatalogIds } from '../scripts/modelCatalog.js';
 import { buildContextCacheKey } from '../scripts/surroundingContext.js';
 import { enrichMarkdownWithConjugation } from '../scripts/conjugation.js';
-import { repairRuby, separateReadingContract } from '../scripts/rubyContract.js';
+import { repairRuby, separateReadingContract, reconcileRuby } from '../scripts/rubyContract.js';
 
 // Configure marked.js to preserve ruby tags and add classes
 marked.setOptions({
@@ -737,8 +737,34 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
                         }
                         const humanMarkdown = separated.markdown;
-                        // v0.2 Phase 1B: normalize the human-readable Markdown
-                        // with the deterministic ruby contract before any
+                        // v0.2 Phase 2B-2: when a valid reading contract is
+                        // present AND it is grounded in the actual selected text
+                        // (`selectedTextForRequest`, captured when this request
+                        // started — never a fresh page-selection read, so a
+                        // selection change mid-stream cannot corrupt it), its
+                        // tokens are AUTHORITATIVE for the source sentence.
+                        // Rebuild ONLY the `### 原句` source line's inline ruby
+                        // from those tokens — deterministically, before repairRuby
+                        // / conjugation / parsing. Generated teaching content
+                        // (漢字提取 / 單字分析 / 文法分析 / 搭配分析 / 語體 /
+                        // examples / templates / the 翻譯 line) is never touched.
+                        // No / invalid / ungrounded contract -> strict no-op (the
+                        // fallback path; V1 + managed-provider are unaffected).
+                        const reconciled = reconcileRuby(
+                            humanMarkdown, separated.readingContract, selectedTextForRequest
+                        );
+                        if (reconciled.issues.length > 0) {
+                            const reconcileCounts = {};
+                            for (const issue of reconciled.issues) {
+                                reconcileCounts[issue.code] = (reconcileCounts[issue.code] || 0) + 1;
+                            }
+                            const reconcileSummary = Object.entries(reconcileCounts)
+                                .map(([code, count]) => `${code}×${count}`)
+                                .join(', ');
+                            console.warn(`[ruby-contract] reading reconciliation skipped: ${reconcileSummary}`);
+                        }
+                        // v0.2 Phase 1B: normalize the (reconciled) human-readable
+                        // Markdown with the deterministic ruby contract before any
                         // consumer reads it. This only applies conservative,
                         // unambiguous repairs (currently: a plain-text surface
                         // that exactly duplicates the base of the ruby token
@@ -748,7 +774,7 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         // below. Streaming-preview rendering is intentionally NOT
                         // run through this — a partial `{漢字` mid-stream is not
                         // malformed final output.
-                        const rubyRepair = repairRuby(humanMarkdown);
+                        const rubyRepair = repairRuby(reconciled.text);
                         if (rubyRepair.remainingIssues.length > 0) {
                             const issueCounts = {};
                             for (const issue of rubyRepair.remainingIssues) {

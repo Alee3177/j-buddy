@@ -9,7 +9,7 @@
  * drives BOTH the rendered HTML and the saved-item detail, from a single pass.
  */
 import { enrichMarkdownWithConjugation } from '../src/scripts/conjugation.js';
-import { repairRuby } from '../src/scripts/rubyContract.js';
+import { repairRuby, reconcileRuby, separateReadingContract } from '../src/scripts/rubyContract.js';
 import { formatAnalysisResult } from '../src/sidepanel/sidepanel.js';
 
 describe('conjugation integration (U4): enrich -> formatAnalysisResult', () => {
@@ -183,5 +183,67 @@ describe('conjugation integration (U4): enrich -> formatAnalysisResult', () => {
     expect(result.html).toContain('造句模板');
     expect(result.html).toContain('<rb>後押</rb>');
     expect(result.html).toContain('<rb>地域経済</rb>');
+  });
+});
+
+describe('v0.2 Phase 2B-2: separate -> reconcile -> repair -> enrich -> format compose in order', () => {
+  test('reconciled ### 原句 line and conjugation-enriched ### 單字分析 coexist from one pass', () => {
+    // Full model response: human Markdown (wrong date reading in ### 原句,
+    // a verb entry in ### 單字分析 with a duplicated-surface 辭書形) + the
+    // authoritative reading contract as the final json block.
+    const fullText = [
+      '### 原句',
+      '  - 3{日|にち}{以降|いこう}に{動|うご}く',
+      '  - 翻譯：moves from the 3rd onward',
+      '',
+      '### 單字分析',
+      '#### <單字>{動|うご}く',
+      '  - 動詞分類：五段動詞',
+      '  - 辭書形：動{動|うご}く',
+      '',
+      '### 文法分析',
+      '（無）',
+      '',
+      '```json',
+      JSON.stringify({
+        reading_contract_version: 1,
+        source_text: '3日以降に動く',
+        tokens: [
+          { text: '3', reading: null },
+          { text: '日', reading: 'みっか' },
+          { text: '以降', reading: 'いこう' },
+          { text: 'に', reading: null },
+          { text: '動', reading: 'うご' },
+          { text: 'く', reading: null },
+        ],
+      }),
+      '```',
+      '',
+    ].join('\n');
+
+    // Exactly the onDone pipeline order.
+    const separated = separateReadingContract(fullText);
+    expect(separated.markdown).not.toContain('reading_contract_version');
+
+    // 3rd arg = the request-captured selected text (matches source_text here)
+    const reconciled = reconcileRuby(separated.markdown, separated.readingContract, '3日以降に動く');
+    expect(reconciled.text.split('\n')[1]).toBe('  - 3{日|みっか}{以降|いこう}に{動|うご}く');
+
+    const repaired = repairRuby(reconciled.text);
+    // the reconstructed source line needs no repair
+    expect(repaired.text.split('\n')[1]).toBe('  - 3{日|みっか}{以降|いこう}に{動|うご}く');
+    // the duplicated-surface 辭書形 in ### 單字分析 still gets repaired here
+    expect(repaired.text).toContain('辭書形：{動|うご}く');
+    expect(repaired.text).not.toContain('辭書形：動{動|うご}く');
+
+    const enriched = enrichMarkdownWithConjugation(repaired.text);
+    expect(enriched).toContain('ます形：{動|うご}きます');
+
+    const result = formatAnalysisResult(enriched);
+    const verb = result.json.words.find((w) => w.term.includes('動'));
+    expect(verb.detail).toContain('ます形：{動|うご}きます');
+    // reconciled source line survives into the rendered HTML
+    expect(result.html).toContain('<rb>日</rb><rt>みっか</rt>');
+    expect(result.html).not.toContain('reading_contract_version');
   });
 });

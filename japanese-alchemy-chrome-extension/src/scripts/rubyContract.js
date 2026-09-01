@@ -617,3 +617,194 @@ export function separateReadingContract(markdown) {
     hadContract: true,
   };
 }
+
+// --- ruby reconciliation (v0.2 Phase 2B-2) ----------------------------------
+//
+// When a valid reading contract is present, its tokens are AUTHORITATIVE for the
+// original selected source text. Phase 2B-2 uses them to rebuild the inline ruby
+// of ONE line only — the Japanese source presentation under `### 原句`. It never
+// touches 漢字提取 / 單字分析 / 文法分析 / 搭配分析 / 語體 sections, generated
+// examples, templates, recall questions, conjugation forms, or the 翻譯 line:
+// the contract describes 【分析対象】, not generated teaching content.
+
+export const RUBY_RECONCILE_ISSUE_CODES = Object.freeze({
+  // The contract's source_text is not exactly the browser-selected analysis
+  // target — grounding failure. Distinct trust boundary: the model could repeat
+  // the same fabricated sentence in both ### 原句 and the contract, and only
+  // this check catches that.
+  RECONCILE_SELECTED_TEXT_MISMATCH: 'RECONCILE_SELECTED_TEXT_MISMATCH',
+  RECONCILE_SOURCE_LINE_NOT_FOUND: 'RECONCILE_SOURCE_LINE_NOT_FOUND',
+  RECONCILE_SOURCE_LINE_AMBIGUOUS: 'RECONCILE_SOURCE_LINE_AMBIGUOUS',
+  // The visible ### 原句 surface is not exactly the contract's source_text.
+  RECONCILE_SOURCE_TEXT_MISMATCH: 'RECONCILE_SOURCE_TEXT_MISMATCH',
+});
+const RCN = RUBY_RECONCILE_ISSUE_CODES;
+
+const RE_GENKU_HEADING = /^\s{0,3}#{1,6}\s+原句\s*[:：]?\s*$/;
+const RE_ANY_H1_TO_H3 = /^\s{0,3}#{1,3}\s+\S/;
+const RE_LINE_PREFIX = /^(\s*(?:[-*]\s+)?)([\s\S]*)$/;
+const RE_TRANSLATION_LINE = /^(?:翻譯|翻译)\s*[:：]/;
+
+/**
+ * Remove well-formed `{base|reading}` ruby markup, returning the base surface.
+ *
+ * Conservative on purpose: only a strict single-pipe, brace-balanced token is
+ * stripped. Malformed ruby (`{漢字かな}`, `{漢字|かん|じ}`, `{流|なが}れ込|こ}み`)
+ * is left byte-for-byte, so a caller comparing the result to a known plain
+ * surface will simply not match and can decline to act.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripRubyMarkup(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(/\{([^{}|]+)\|([^{}|]+)\}/g, '$1');
+}
+
+/** Rebuild one canonical inline-ruby string from authoritative contract tokens. */
+function reconstructCanonicalRuby(tokens) {
+  let out = '';
+  for (const t of tokens) {
+    out += t.reading === null ? t.text : `{${t.text}|${t.reading}}`;
+  }
+  return out;
+}
+
+/**
+ * @typedef {Object} ReconcileRepair
+ * @property {'RECONCILE_SOURCE_LINE'} code
+ * @property {number} start   source index of the replaced content run (prefix excluded)
+ * @property {number} end     source index just past the replaced content run
+ * @property {string} before  the original source-line content
+ * @property {string} after   the canonical content written in its place
+ */
+/**
+ * @typedef {Object} ReconcileIssue
+ * @property {string}  code     one of RUBY_RECONCILE_ISSUE_CODES
+ * @property {string}  message  developer-facing detail
+ * @property {number} [index]
+ */
+
+/**
+ * Deterministically reconcile the inline ruby of the `### 原句` source line
+ * against an authoritative reading contract.
+ *
+ * Pure, total, deterministic, idempotent, never throws.
+ *
+ * When `readingContract` is null / not a validated contract, this is a strict
+ * no-op (the fallback path — V1 and managed-provider responses are unaffected).
+ *
+ * When a contract is present it:
+ *   0. GROUNDING GUARD: `readingContract.sourceText` must exactly equal
+ *      `expectedSourceText` (the request-captured browser selection — the real
+ *      ground truth). Both `### 原句` and `sourceText` come from the same model
+ *      turn, so without this a self-consistent hallucination would pass. Exact
+ *      equality only — no trim / NFKC / width / whitespace normalization. On
+ *      mismatch: no reconciliation, one `RECONCILE_SELECTED_TEXT_MISMATCH`.
+ *   1. finds the `### 原句` heading and the first non-empty, non-`翻譯` content
+ *      line beneath it (before the next `#`/`##`/`###` heading);
+ *   2. SOURCE-FIDELITY GUARD: the source line's plain surface — after
+ *      `stripRubyMarkup`, and also after the deterministic safe `repairRuby`
+ *      pass (so an already-safe-repairable duplicate like `以降{以降|…}` still
+ *      qualifies) — must equal `readingContract.sourceText` exactly. Otherwise
+ *      it does NOT reconcile and returns a non-fatal issue;
+ *   3. replaces ONLY that line's content (line prefix / indentation preserved)
+ *      with the canonical ruby rebuilt from the contract tokens.
+ *
+ * Full authoritative trust chain:
+ *   expectedSourceText (browser selection)
+ *     === readingContract.sourceText
+ *     === stripRubyMarkup(### 原句 surface)   → canonical reconstruction allowed
+ *
+ * @param {string} markdown         human-only Markdown (contract already removed)
+ * @param {ReadingContract|null} readingContract
+ * @param {string} expectedSourceText  the request-captured selected analysis
+ *   target. Not a string → grounding fails (production must always pass it).
+ * @returns {{ text: string, changed: boolean, repairs: ReconcileRepair[], issues: ReconcileIssue[] }}
+ */
+export function reconcileRuby(markdown, readingContract, expectedSourceText) {
+  const src = typeof markdown === 'string' ? markdown : '';
+  const noop = () => ({ text: src, changed: false, repairs: [], issues: [] });
+  const skip = (code, message) => ({ text: src, changed: false, repairs: [], issues: [{ code, message }] });
+
+  if (!readingContract
+      || typeof readingContract !== 'object'
+      || typeof readingContract.sourceText !== 'string'
+      || !Array.isArray(readingContract.tokens)) {
+    return noop();
+  }
+
+  // Grounding: the contract must describe the ACTUAL selected text, byte-for-byte.
+  if (typeof expectedSourceText !== 'string'
+      || readingContract.sourceText !== expectedSourceText) {
+    return skip(RCN.RECONCILE_SELECTED_TEXT_MISMATCH,
+      'The reading contract source_text is not exactly the selected analysis target.');
+  }
+
+  const lines = src.split('\n');
+
+  let headingIdx = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (RE_GENKU_HEADING.test(lines[i])) { headingIdx = i; break; }
+  }
+  if (headingIdx === -1) {
+    return skip(RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, 'No "### 原句" section in the analysis.');
+  }
+
+  const candidates = [];
+  for (let i = headingIdx + 1; i < lines.length; i += 1) {
+    if (RE_ANY_H1_TO_H3.test(lines[i])) break;
+    const cr = lines[i].endsWith('\r') ? '\r' : '';
+    const bare = cr ? lines[i].slice(0, -1) : lines[i];
+    if (bare.trim() === '') continue;
+    const m = bare.match(RE_LINE_PREFIX);
+    const prefix = m[1];
+    const content = m[2];
+    if (RE_TRANSLATION_LINE.test(content)) continue;
+    candidates.push({ lineIdx: i, cr, prefix, content });
+  }
+  if (candidates.length === 0) {
+    return skip(RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, 'No source line under "### 原句".');
+  }
+
+  const { sourceText } = readingContract;
+  const surfacesMatch = (content) => {
+    if (stripRubyMarkup(content) === sourceText) return true;
+    const safe = repairRuby(content);
+    return safe.changed && stripRubyMarkup(safe.text) === sourceText;
+  };
+  const matching = candidates.filter((c) => surfacesMatch(c.content));
+  if (matching.length === 0) {
+    return skip(RCN.RECONCILE_SOURCE_TEXT_MISMATCH,
+      'The "### 原句" source line plain surface does not equal the contract source_text.');
+  }
+  if (matching.length > 1) {
+    return skip(RCN.RECONCILE_SOURCE_LINE_AMBIGUOUS,
+      'More than one "### 原句" line matches the contract source_text.');
+  }
+
+  const target = matching[0];
+  const canonical = reconstructCanonicalRuby(readingContract.tokens);
+  if (canonical === target.content) {
+    return noop();
+  }
+
+  const newLines = lines.slice();
+  newLines[target.lineIdx] = target.prefix + canonical + target.cr;
+  const text = newLines.join('\n');
+
+  const lineStart = lines.slice(0, target.lineIdx).reduce((n, l) => n + l.length + 1, 0);
+  const start = lineStart + target.prefix.length;
+  return {
+    text,
+    changed: true,
+    repairs: [{
+      code: 'RECONCILE_SOURCE_LINE',
+      start,
+      end: start + target.content.length,
+      before: target.content,
+      after: canonical,
+    }],
+    issues: [],
+  };
+}
