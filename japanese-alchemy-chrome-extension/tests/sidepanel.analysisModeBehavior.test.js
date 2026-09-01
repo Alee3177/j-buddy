@@ -64,11 +64,18 @@ function setupElements() {
   const saveAsBtn = { disabled: true };
   const saveForLaterBtn = { disabled: true, classList: createClassList() };
   const cancelAnalysisButton = { hidden: true };
+  const pendingSelectionStatus = {
+    textContent: '',
+    classList: createClassList(['show']),
+  };
+  const analyzeButton = { disabled: true };
   const elements = {
     alertMessage,
     analysisModeButtons: [compactButton, usageButton],
+    analyzeButton,
     cancelAnalysisButton,
     copyButton,
+    pendingSelectionStatus,
     prose,
     result,
     saveAsBtn,
@@ -79,18 +86,22 @@ function setupElements() {
     if (id === 'result') return result;
     if (id === 'loading') return loading;
     if (id === 'alertMessage') return alertMessage;
+    if (id === 'pendingSelectionStatus') return pendingSelectionStatus;
+    if (id === 'analyzeButton') return analyzeButton;
     return null;
   });
 
   setSidepanelElementsForTesting(elements);
   return {
     alertMessage,
+    analyzeButton,
     compactButton,
     cancelAnalysisButton,
     copyButton,
     elements,
     loading,
     loadingMessage,
+    pendingSelectionStatus,
     prose,
     result,
     saveAsBtn,
