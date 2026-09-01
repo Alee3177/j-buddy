@@ -12,6 +12,8 @@ import {
   validateRuby,
   repairRuby,
   ISSUE_CODES,
+  parseReadingContract,
+  READING_CONTRACT_ISSUE_CODES as RC,
 } from '../src/scripts/rubyContract.js';
 
 const codes = (result) => result.issues.map((i) => i.code);
@@ -351,5 +353,202 @@ describe('rubyContract — Unicode & mixed real-world text', () => {
     const result = validateRuby(text);
     const issue = result.issues.find((i) => i.code === ISSUE_CODES.NON_KANJI_BASE);
     expect(text.slice(issue.index, issue.index + issue.raw.length)).toBe('{関東も週末|かんとう}');
+  });
+});
+
+// --- v0.2 Phase 2A: parseReadingContract ------------------------------------
+
+/** Wrap a JS object as the final ```json fenced block of a model response. */
+function asFinalJsonBlock(obj, { lang = 'json', trailing = '', prefix = '' } = {}) {
+  return `${prefix}### 原句\n  - prose\n\n\`\`\`${lang}\n${JSON.stringify(obj, null, 2)}\n\`\`\`${trailing}`;
+}
+const tok = (text, reading = null) => ({ text, reading });
+const contractOf = (sourceText, tokens, version = 1) => ({
+  reading_contract_version: version,
+  source_text: sourceText,
+  tokens,
+});
+const rcCodes = (r) => r.issues.map((i) => i.code);
+
+describe('rubyContract.parseReadingContract — extraction safety', () => {
+  test('D: no final fenced json block → READING_CONTRACT_NOT_FOUND', () => {
+    const r = parseReadingContract('### 原句\njust prose, no fenced block at all.');
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_NOT_FOUND]);
+    expect(r.contract).toBeNull();
+  });
+
+  test('I: a valid contract that is NOT the final content → NOT_FOUND (trailing prose)', () => {
+    const md = asFinalJsonBlock(contractOf('あ', [tok('あ', 'あ')]), {
+      trailing: '\n\nAnything after the contract block is disallowed.',
+    });
+    // (the reading here is bogus but that is irrelevant — it is never reached)
+    const r = parseReadingContract(md);
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_NOT_FOUND]);
+  });
+
+  test('M: a valid contract followed only by whitespace/newlines → valid', () => {
+    const md = asFinalJsonBlock(contractOf('雨', [tok('雨', 'あめ')]), { trailing: '\n   \n\t\n' });
+    const r = parseReadingContract(md);
+    expect(r.ok).toBe(true);
+    expect(r.contract.tokens).toEqual([{ text: '雨', reading: 'あめ' }]);
+  });
+
+  test('H/N: an earlier fenced block is ignored; only the final contract is parsed', () => {
+    const earlier = '```json\n{"unrelated":true,"reading_contract_version":1}\n```';
+    const finalContract = JSON.stringify(contractOf('台風', [tok('台風', 'たいふう')]));
+    const md = `### 原句\n${earlier}\n\nmore prose\n\n\`\`\`json\n${finalContract}\n\`\`\`\n`;
+    const r = parseReadingContract(md);
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe('台風');
+  });
+
+  test('J: a final unrelated JSON object → conservative NOT_FOUND (locked behaviour)', () => {
+    const r = parseReadingContract('### 原句\nprose\n\n```json\n{"foo":"bar"}\n```\n');
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_NOT_FOUND]);
+  });
+
+  test('a non-json language tag on the final fence → NOT_FOUND', () => {
+    const md = '```javascript\n{"reading_contract_version":1,"source_text":"あ","tokens":[]}\n```';
+    expect(rcCodes(parseReadingContract(md))).toEqual([RC.READING_CONTRACT_NOT_FOUND]);
+  });
+
+  test('non-string input is handled without throwing', () => {
+    for (const bad of [undefined, null, 42, {}, []]) {
+      const r = parseReadingContract(bad);
+      expect(r).toMatchObject({ ok: false, contract: null });
+      expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_NOT_FOUND]);
+    }
+  });
+});
+
+describe('rubyContract.parseReadingContract — structural validation', () => {
+  test('A: a well-formed contract parses; version/sourceText/tokens/concatenation exact', () => {
+    const source = '台風24号発生　3日以降';
+    const tokens = [
+      tok('台風', 'たいふう'),
+      tok('24', null),
+      tok('号', 'ごう'),
+      tok('発生', 'はっせい'),
+      tok('　', null),
+      tok('3', null),
+      tok('日', 'みっか'),
+      tok('以降', 'いこう'),
+    ];
+    const r = parseReadingContract(asFinalJsonBlock(contractOf(source, tokens)));
+
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    expect(r.contract.version).toBe(1);
+    expect(r.contract.sourceText).toBe(source);
+    expect(r.contract.tokens).toEqual(tokens.map((t) => ({ text: t.text, reading: t.reading })));
+    expect(r.contract.tokens.map((t) => t.text).join('')).toBe(source);
+  });
+
+  test('B: token concatenation ≠ source_text → READING_CONTRACT_SOURCE_MISMATCH', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以後', 'いご')]),
+    ));
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_SOURCE_MISMATCH]);
+    expect(r.issues[0].index).toBe('3日以'.length); // first差 at the 後/降 position
+  });
+
+  test('C: invalid JSON in the final fence → READING_CONTRACT_INVALID_JSON', () => {
+    const r = parseReadingContract('### 原句\nprose\n\n```json\n{ "reading_contract_version": 1, }\n```\n');
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_JSON]);
+  });
+
+  test('E: reading_contract_version = 2 → READING_CONTRACT_UNSUPPORTED_VERSION', () => {
+    const r = parseReadingContract(asFinalJsonBlock(contractOf('あ', [tok('あ')], 2)));
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+  });
+
+  test('E2: non-integer version ("1" / 1.5) → READING_CONTRACT_UNSUPPORTED_VERSION', () => {
+    expect(rcCodes(parseReadingContract(asFinalJsonBlock(contractOf('あ', [tok('あ')], '1')))))
+      .toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+    expect(rcCodes(parseReadingContract(asFinalJsonBlock(contractOf('あ', [tok('あ')], 1.5)))))
+      .toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+  });
+
+  test('F: an empty-string token.text → READING_CONTRACT_EMPTY_TOKEN (index reported)', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('日', [{ text: '', reading: null }]),
+    ));
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_EMPTY_TOKEN]);
+    expect(r.issues[0].index).toBe(0);
+  });
+
+  test('G: a non-string reading (123) → READING_CONTRACT_INVALID_READING', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('日', [{ text: '日', reading: 123 }]),
+    ));
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_READING]);
+    expect(r.issues[0].index).toBe(0);
+  });
+
+  test('an empty-string reading is rejected, not silently treated as null', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('日', [{ text: '日', reading: '' }]),
+    ));
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_READING]);
+  });
+
+  test('shape errors: non-object top level, missing source_text, tokens not an array', () => {
+    expect(rcCodes(parseReadingContract('```json\n[1,2,3]\n```')))
+      .toEqual([RC.READING_CONTRACT_NOT_FOUND]); // array, no discriminator
+    expect(rcCodes(parseReadingContract(asFinalJsonBlock({ reading_contract_version: 1, tokens: [] }))))
+      .toEqual([RC.READING_CONTRACT_INVALID_SHAPE]); // missing source_text
+    expect(rcCodes(parseReadingContract(asFinalJsonBlock({
+      reading_contract_version: 1, source_text: 'あ', tokens: 'nope',
+    })))).toEqual([RC.READING_CONTRACT_INVALID_SHAPE]);
+    expect(rcCodes(parseReadingContract(asFinalJsonBlock(
+      contractOf('あ', ['not-an-object']),
+    )))).toEqual([RC.READING_CONTRACT_INVALID_SHAPE]);
+  });
+
+  test('K: ASCII space, full-width space (U+3000), Japanese punctuation and newline are preserved exactly', () => {
+    const source = 'A B　あ、\nイ。';
+    const tokens = [
+      tok('A'), tok(' '), tok('B'), tok('　'),
+      tok('あ'), tok('、'), tok('\n'), tok('イ'), tok('。'),
+    ];
+    const r = parseReadingContract(asFinalJsonBlock(contractOf(source, tokens)));
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe(source);
+    expect(r.contract.tokens.map((t) => t.text).join('')).toBe(source);
+    // no normalization: the full-width space is still U+3000, not an ASCII space
+    expect(r.contract.tokens[3].text).toBe('　');
+  });
+
+  test('O: full-width digits/latin, emoji and other Unicode survive byte-for-byte', () => {
+    const source = '３号🌀とＡ';
+    const tokens = [tok('３'), tok('号', 'ごう'), tok('🌀'), tok('と'), tok('Ａ')];
+    const r = parseReadingContract(asFinalJsonBlock(contractOf(source, tokens)));
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe(source);
+    expect(r.contract.sourceText.normalize('NFKC')).not.toBe(r.contract.sourceText); // proves no NFKC
+  });
+});
+
+describe('rubyContract.parseReadingContract — semantic scope is deferred (Phase 2A)', () => {
+  test('L: a contextually wrong day reading (3日 → にち) is STRUCTURALLY valid → ok:true', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('3日以降', [tok('3'), tok('日', 'にち'), tok('以降', 'いこう')]),
+    ));
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    // reading is returned verbatim — never rewritten to みっか here
+    expect(r.contract.tokens[1]).toEqual({ text: '日', reading: 'にち' });
+  });
+
+  test('parseReadingContract never emits SUSPECT_COUNTER_READING (that heuristic stays in validateRuby)', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('3日', [tok('3'), tok('日', 'にち')]),
+    ));
+    expect(rcCodes(r)).not.toContain('SUSPECT_COUNTER_READING');
+    expect(rcCodes(r)).not.toContain(ISSUE_CODES.SUSPECT_COUNTER_READING);
   });
 });

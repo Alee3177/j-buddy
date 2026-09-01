@@ -4,6 +4,7 @@ import {
   buildDirectCompletionRequest,
   getSystemPrompt,
 } from '../src/scripts/directAnalysisContract.js';
+import { parseReadingContract } from '../src/scripts/rubyContract.js';
 
 const profile = {
   apiUrl: 'https://provider.example/v1',
@@ -172,5 +173,103 @@ describe('Japanese Analysis Contract v0.1 — language-QA cleanup regressions', 
     expect(v2).toContain('不要把目標文句中不存在的文法形式、句尾表現、助詞、搭配或語體特徵，僅作為補充知識另外引入或分析');
     expect(v2).toContain('若【分析対象】中沒有出現「という」，就不要建立一則獨立的語體／文法項目去解釋「という」');
     expect(v2).toContain('補充比較只允許出現在既有條目內，且必須直接澄清一個確實存在於原句的形式');
+  });
+});
+
+describe('Japanese Reader v0.2 Phase 2A — authoritative reading-contract block in SYSTEM_PROMPT_V2', () => {
+  const v2 = getSystemPrompt('v2');
+
+  test('requires a final machine-readable reading-contract JSON block', () => {
+    expect(v2).toContain('讀音契約');
+    expect(v2).toContain('必須是整個回應的最後內容');
+    expect(v2).toContain('語言標籤為 json 的 fenced code block');
+    expect(v2).toContain('```json'); // the worked example block
+  });
+
+  test('requires reading_contract_version to be integer 1', () => {
+    expect(v2).toContain('"reading_contract_version": 1');
+    expect(v2).toContain('reading_contract_version 必須是整數 1');
+  });
+
+  test('requires source_text to reproduce 【分析対象】 exactly, with no normalization', () => {
+    expect(v2).toContain('source_text 必須逐字重現【分析対象】');
+    expect(v2).toContain('保留所有 Unicode 字元、ASCII 空格、全形空格（U+3000）、標點、數字、符號、換行');
+    expect(v2).toContain('不得修剪、正規化、轉換全形／半形、改寫或重複');
+  });
+
+  test('requires token.text concatenation to equal source_text exactly', () => {
+    expect(v2).toContain('把每個 token.text 依序連接起來，必須完全等於 source_text');
+    expect(v2).toContain('不可略過空白或標點');
+    expect(v2).toContain('不可插入 source_text 沒有的文字');
+    expect(v2).toContain('不可重複表面文字');
+  });
+
+  test('requires contextual calendar-date readings including 1日→ついたち and 3日→みっか', () => {
+    expect(v2).toContain('1日→ついたち');
+    expect(v2).toContain('3日→みっか');
+    expect(v2).toContain('24日→にじゅうよっか');
+    expect(v2).toContain('例如「3日以降」的 tokens 為：{"text":"3","reading":null}、{"text":"日","reading":"みっか"}、{"text":"以降","reading":"いこう"}');
+  });
+
+  test('excludes romanization, pitch accent and JLPT from the reading-contract block', () => {
+    expect(v2).toContain('不得放羅馬拼音、重音（pitch accent）、JLPT 等級、翻譯或語意說明');
+  });
+
+  test('forbids span-mismatched readings (関東も週末 → かんとう is called out as wrong)', () => {
+    expect(v2).toContain('token 邊界忠實：reading 必須正好對應該 token.text 的範圍');
+    expect(v2).toContain('{"text":"関東も週末","reading":"かんとう"}');
+  });
+
+  test('mandates output ordering with the reading contract as the final block', () => {
+    expect(v2).toContain('## 輸出順序');
+    expect(v2).toContain('讀音契約之後不得再有任何內容');
+    const order = [
+      '### 原句', '### 漢字提取', '### 單字分析',
+      '### 文法分析', '### 搭配分析', '### 語體／新聞表現',
+    ];
+    let cursor = -1;
+    for (const heading of order) {
+      const at = v2.indexOf(heading, cursor + 1);
+      expect(at).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+  });
+
+  test('keeps inline {漢字|かな} ruby and does not remove it', () => {
+    expect(v2).toContain('本階段人類可讀 Markdown 仍須照常使用 {漢字|かな}');
+    expect(v2).toContain('不要移除既有的行內 ruby');
+  });
+
+  test('the prompt’s own worked example is itself a valid reading contract', () => {
+    // Cross-check: the example block at the end of SYSTEM_PROMPT_V2 must parse
+    // clean through the Phase 2A parser (final json fence, version 1,
+    // concatenation === source_text).
+    const parsed = parseReadingContract(v2);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.contract.version).toBe(1);
+    expect(parsed.contract.tokens.map((t) => t.text).join('')).toBe(parsed.contract.sourceText);
+    // the example sentence is the same one the human-readable ### 原句 block uses
+    expect(parsed.contract.sourceText).toContain('同技術は特に労働力不足');
+    expect(parsed.contract.sourceText.endsWith('後押しするという。')).toBe(true);
+  });
+
+  test('preserves the existing human-readable Markdown section contract', () => {
+    for (const heading of [
+      '### 原句', '### 漢字提取', '### 單字分析',
+      '### 文法分析', '### 搭配分析', '### 語體／新聞表現',
+    ]) {
+      expect(v2).toContain(heading);
+    }
+    expect(v2).toContain('#### <單字>');
+    expect(v2).toContain('#### <文法>');
+    // v0.1 assertions untouched
+    expect(v2).toContain('最多 4 個高價值詞');
+    expect(v2).toContain('0〜5 個真正的文法點');
+  });
+
+  test('SYSTEM_PROMPT_V1 is not given a reading-contract block', () => {
+    expect(getSystemPrompt('v1')).not.toContain('reading_contract_version');
+    expect(getSystemPrompt('v1')).not.toContain('```json');
   });
 });

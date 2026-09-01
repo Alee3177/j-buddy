@@ -359,3 +359,175 @@ export function repairRuby(text) {
     remainingIssues: validateRuby(out).issues,
   };
 }
+
+// --- reading contract (v0.2 Phase 2A) -----------------------------------------
+//
+// SYSTEM_PROMPT_V2 appends, as the FINAL fenced ```json block of the model
+// response, an authoritative reading-segmentation contract for the original
+// analysis target. Phase 2A only *parses and structurally validates* that block
+// — it is NOT wired into the runtime, NOT reconciled against the inline
+// `{漢字|かな}` ruby, and NOT persisted. Making it authoritative is Phase 2B.
+
+export const READING_CONTRACT_ISSUE_CODES = Object.freeze({
+  READING_CONTRACT_NOT_FOUND: 'READING_CONTRACT_NOT_FOUND',
+  READING_CONTRACT_INVALID_JSON: 'READING_CONTRACT_INVALID_JSON',
+  READING_CONTRACT_INVALID_SHAPE: 'READING_CONTRACT_INVALID_SHAPE',
+  READING_CONTRACT_UNSUPPORTED_VERSION: 'READING_CONTRACT_UNSUPPORTED_VERSION',
+  READING_CONTRACT_EMPTY_TOKEN: 'READING_CONTRACT_EMPTY_TOKEN',
+  READING_CONTRACT_INVALID_READING: 'READING_CONTRACT_INVALID_READING',
+  READING_CONTRACT_SOURCE_MISMATCH: 'READING_CONTRACT_SOURCE_MISMATCH',
+});
+
+const RC = READING_CONTRACT_ISSUE_CODES;
+const READING_CONTRACT_VERSION = 1;
+
+/**
+ * @typedef {Object} ReadingContractToken
+ * @property {string}      text     a contiguous substring of the source text
+ * @property {string|null} reading  kana reading, or null for text needing none
+ */
+/**
+ * @typedef {Object} ReadingContract
+ * @property {1}                      version
+ * @property {string}                 sourceText
+ * @property {ReadingContractToken[]} tokens
+ */
+/**
+ * @typedef {Object} ReadingContractIssue
+ * @property {string}  code      one of READING_CONTRACT_ISSUE_CODES
+ * @property {string}  message   human-readable detail (developer-facing)
+ * @property {number} [index]    token index / first mismatch offset, when known
+ */
+
+function firstDiffIndex(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    if (a[i] !== b[i]) return i;
+  }
+  return n;
+}
+
+/**
+ * Locate and STRUCTURALLY validate the authoritative reading-contract JSON block
+ * that SYSTEM_PROMPT_V2 appends as the final fenced ```json block of a response.
+ *
+ * Pure and total: no DOM / storage / network / side effects; never throws on any
+ * model output.
+ *
+ * Extraction safety:
+ *   - Only the block that is the final non-whitespace content is considered.
+ *   - It must be a block-level fence tagged `json`.
+ *   - Earlier fenced blocks are ignored.
+ *   - The parsed value must be an object carrying `reading_contract_version`;
+ *     arbitrary final JSON (e.g. `{"foo":"bar"}`) is rejected as NOT_FOUND.
+ *
+ * Structural validation only (Phase 2A): a contextually wrong reading such as
+ * `{ "text": "日", "reading": "にち" }` for `3日` still returns `ok: true`. No
+ * NFKC / whitespace / width normalization is performed anywhere. Semantic
+ * reconciliation (and any にち→みっか correction) is deferred to Phase 2B and is
+ * unrelated to the `SUSPECT_COUNTER_READING` heuristic in `validateRuby`.
+ *
+ * @param {string} markdown  the full model response text
+ * @returns {{ ok: boolean, contract: ReadingContract|null, issues: ReadingContractIssue[] }}
+ */
+export function parseReadingContract(markdown) {
+  const src = typeof markdown === 'string' ? markdown : '';
+  const fail = (code, message, index) => ({
+    ok: false,
+    contract: null,
+    issues: [index === undefined ? { code, message } : { code, message, index }],
+  });
+
+  // 1. The contract must be the final non-whitespace content and close with ```.
+  const trimmedEnd = src.replace(/\s+$/, '');
+  if (!trimmedEnd || !/```$/.test(trimmedEnd)) {
+    return fail(RC.READING_CONTRACT_NOT_FOUND,
+      'No fenced code block is the final content of the response.');
+  }
+
+  const closeIdx = trimmedEnd.lastIndexOf('```');
+  const beforeClose = trimmedEnd.slice(0, closeIdx);
+  const openIdx = beforeClose.lastIndexOf('```');
+  if (openIdx === -1) {
+    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Unterminated final code fence.');
+  }
+  if (openIdx !== 0 && beforeClose[openIdx - 1] !== '\n') {
+    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Final code fence is not block-level.');
+  }
+  const openLineEnd = beforeClose.indexOf('\n', openIdx);
+  if (openLineEnd === -1) {
+    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Malformed final code fence.');
+  }
+  const infoString = beforeClose.slice(openIdx + 3, openLineEnd).trim();
+  if (infoString.toLowerCase() !== 'json') {
+    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Final fenced block is not tagged as json.');
+  }
+  const jsonText = beforeClose.slice(openLineEnd + 1);
+
+  // 2. Parse JSON. Never repair.
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (_err) {
+    return fail(RC.READING_CONTRACT_INVALID_JSON, 'The final json block is not valid JSON.');
+  }
+
+  // 3. Must be a plain object carrying the discriminator key.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return fail(RC.READING_CONTRACT_NOT_FOUND,
+      'The final json block is not a reading-contract object.');
+  }
+  if (!Object.prototype.hasOwnProperty.call(parsed, 'reading_contract_version')) {
+    return fail(RC.READING_CONTRACT_NOT_FOUND,
+      'The final json block has no reading_contract_version; treated as unrelated JSON.');
+  }
+
+  // 4. Version must be integer 1.
+  const version = parsed.reading_contract_version;
+  if (!Number.isInteger(version) || version !== READING_CONTRACT_VERSION) {
+    return fail(RC.READING_CONTRACT_UNSUPPORTED_VERSION,
+      `Unsupported reading_contract_version: ${JSON.stringify(version)} (expected integer 1).`);
+  }
+
+  // 5. Structural shape.
+  if (typeof parsed.source_text !== 'string') {
+    return fail(RC.READING_CONTRACT_INVALID_SHAPE, 'source_text must be a string.');
+  }
+  if (!Array.isArray(parsed.tokens)) {
+    return fail(RC.READING_CONTRACT_INVALID_SHAPE, 'tokens must be an array.');
+  }
+
+  const sourceText = parsed.source_text;
+  const tokens = [];
+  for (let i = 0; i < parsed.tokens.length; i += 1) {
+    const rawToken = parsed.tokens[i];
+    if (rawToken === null || typeof rawToken !== 'object' || Array.isArray(rawToken)) {
+      return fail(RC.READING_CONTRACT_INVALID_SHAPE, `tokens[${i}] must be an object.`, i);
+    }
+    const { text, reading } = rawToken;
+    if (typeof text !== 'string' || text.length === 0) {
+      return fail(RC.READING_CONTRACT_EMPTY_TOKEN,
+        `tokens[${i}].text must be a non-empty string.`, i);
+    }
+    const readingOk = reading === null || (typeof reading === 'string' && reading.length > 0);
+    if (!readingOk) {
+      return fail(RC.READING_CONTRACT_INVALID_READING,
+        `tokens[${i}].reading must be a non-empty kana string or null.`, i);
+    }
+    tokens.push({ text, reading: reading === null ? null : reading });
+  }
+
+  // 6. Concatenation must reproduce source_text byte-for-byte (no normalization).
+  const concatenated = tokens.map((t) => t.text).join('');
+  if (concatenated !== sourceText) {
+    return fail(RC.READING_CONTRACT_SOURCE_MISMATCH,
+      'Concatenating token.text in order does not equal source_text.',
+      firstDiffIndex(concatenated, sourceText));
+  }
+
+  return {
+    ok: true,
+    contract: { version: READING_CONTRACT_VERSION, sourceText, tokens },
+    issues: [],
+  };
+}
