@@ -1186,14 +1186,25 @@ describe('sidepanel personal-provider settings', () => {
     expect(elements.personalProviderError.textContent).toContain('等待清理');
   });
 
-  test('personal route cannot be selected until its provider is ready and does not start analysis', async () => {
-    setupChrome();
+  test('personal setup can be opened before its provider is ready without activating it', async () => {
+    const { store } = setupChrome();
     const elements = createElements();
 
     await handlePersonalProviderModeChange(elements, PERSONAL_PROVIDER_MODE);
 
-    expect(elements.personalProviderError.textContent).toContain('個人提供者設定不完整');
-    expect(elements.providerModeButtons[0].classList.contains('selected')).toBe(true);
+    // The Personal pane is visible so the user can configure it.
+    expect(elements.providerModeButtons[0].classList.contains('selected')).toBe(false);
+    expect(elements.providerModeButtons[1].classList.contains('selected')).toBe(true);
+    expect(elements.personalProviderForm.hidden).toBe(false);
+    expect(elements.personalProviderSummary.textContent).toContain('尚未完成設定');
+
+    // This is configuration-only: the active analysis provider has not
+    // actually been switched to Personal yet.
+    expect(store[ANALYSIS_PROVIDER_MODE_KEY]).toBe(MANAGED_PROVIDER_MODE);
+
+    expect(elements.personalProviderStatus.textContent)
+      .toContain('請先完成個人提供者設定');
+    expect(elements.personalProviderError.textContent).toBe('');
   });
 
   test('redaction never reveals an API key that is four characters or fewer', () => {

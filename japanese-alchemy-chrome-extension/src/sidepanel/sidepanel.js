@@ -1712,17 +1712,76 @@ export async function handlePersonalProviderSave(elements) {
 
 export async function handlePersonalProviderModeChange(elements, mode) {
     try {
-        await setAnalysisProviderMode(mode);
+        // Personal mode has two distinct states:
+        // 1. configuring an incomplete personal provider
+        // 2. activating an already-ready personal provider
+        //
+        // Do not require activation before the user can access the
+        // configuration form.
+        if (mode === PERSONAL_PROVIDER_MODE) {
+            const state = await getPersonalProviderState();
+
+            // Populate any previously saved values first.
+            renderPersonalProviderState(elements, state);
+
+            if (!state.isPersonalReady) {
+                // Show Personal as the currently viewed configuration pane,
+                // without changing the active analysis provider.
+                updatePersonalProviderModeUi(
+                    elements,
+                    PERSONAL_PROVIDER_MODE,
+                    false
+                );
+
+                if (elements.personalProviderForm) {
+                    elements.personalProviderForm.hidden = false;
+                }
+
+                if (elements.personalProviderSummary) {
+                    elements.personalProviderSummary.textContent = state.profile
+                        ? `個人 · ${state.profile.model} · 無法使用`
+                        : '個人 · 尚未完成設定';
+                }
+
+                setPersonalProviderFeedback(
+                    elements,
+                    '請先完成個人提供者設定。儲存成功後才會正式切換為個人分析。',
+                    'status',
+                    true
+                );
+
+                return state;
+            }
+
+            // Provider is already ready, so it is safe to activate it.
+            await setAnalysisProviderMode(PERSONAL_PROVIDER_MODE);
+
+            const activatedState = await getPersonalProviderState();
+            renderPersonalProviderState(elements, activatedState);
+
+            setPersonalProviderFeedback(
+                elements,
+                '已選取個人提供者。之後的分析會直接傳送至此提供者。',
+                'status',
+                true
+            );
+
+            return activatedState;
+        }
+
+        // Managed mode can always be activated directly.
+        await setAnalysisProviderMode(MANAGED_PROVIDER_MODE);
+
         const state = await getPersonalProviderState();
         renderPersonalProviderState(elements, state);
+
         setPersonalProviderFeedback(
             elements,
-            mode === PERSONAL_PROVIDER_MODE
-                ? '已選取個人提供者。之後的分析會直接傳送至此提供者。'
-                : '已選取代管提供者。之後的分析會使用 J-Buddy 服務。',
+            '已選取代管提供者。之後的分析會使用 J-Buddy 服務。',
             'status',
             true
         );
+
         return state;
     } catch (error) {
         const state = await initializePersonalProviderSettings(elements);
