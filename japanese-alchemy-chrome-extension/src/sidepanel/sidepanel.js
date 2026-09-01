@@ -34,7 +34,7 @@ import { DirectLlmApiService } from '../scripts/directLlmApiService.js';
 import { normalizeModelCatalogIds } from '../scripts/modelCatalog.js';
 import { buildContextCacheKey } from '../scripts/surroundingContext.js';
 import { enrichMarkdownWithConjugation } from '../scripts/conjugation.js';
-import { repairRuby } from '../scripts/rubyContract.js';
+import { repairRuby, separateReadingContract } from '../scripts/rubyContract.js';
 
 // Configure marked.js to preserve ruby tags and add classes
 marked.setOptions({
@@ -715,17 +715,40 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                     // onDone: finalize with full formatting (checkboxes, structured data)
                     (fullText) => {
                         if (!isLatestAnalysis(requestId)) return;
-                        // v0.2 Phase 1B: normalize the FINAL completed text with
-                        // the deterministic ruby contract before any consumer
-                        // reads it. This only applies conservative, unambiguous
-                        // repairs (currently: a plain-text surface that exactly
-                        // duplicates the base of the ruby token right after it,
-                        // e.g. `以降{以降|いこう}` -> `{以降|いこう}`). Ambiguous
-                        // malformed ruby and semantic reading warnings are left
-                        // untouched and only reported below. Streaming-preview
-                        // rendering is intentionally NOT run through this — a
-                        // partial `{漢字` mid-stream is not malformed final output.
-                        const rubyRepair = repairRuby(fullText);
+                        // v0.2 Phase 2B-1: split the machine-readable reading
+                        // contract (the final ```json block SYSTEM_PROMPT_V2
+                        // appends) off the human-readable Markdown BEFORE any
+                        // ruby / conjugation / parser / render / cache / save
+                        // step sees the text. The contract is metadata: in this
+                        // phase it is parsed, validated, and then discarded — it
+                        // is NOT yet reconciled against the inline {漢字|かな}
+                        // ruby (that is Phase 2B-2). A final block that is not a
+                        // provably valid contract is left in place untouched, so
+                        // model/user-visible content is never deleted on a guess.
+                        const separated = separateReadingContract(fullText);
+                        if (separated.contractIssues.length > 0) {
+                            const contractCounts = {};
+                            for (const issue of separated.contractIssues) {
+                                contractCounts[issue.code] = (contractCounts[issue.code] || 0) + 1;
+                            }
+                            const contractSummary = Object.entries(contractCounts)
+                                .map(([code, count]) => `${code}×${count}`)
+                                .join(', ');
+                            console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
+                        }
+                        const humanMarkdown = separated.markdown;
+                        // v0.2 Phase 1B: normalize the human-readable Markdown
+                        // with the deterministic ruby contract before any
+                        // consumer reads it. This only applies conservative,
+                        // unambiguous repairs (currently: a plain-text surface
+                        // that exactly duplicates the base of the ruby token
+                        // right after it, e.g. `以降{以降|いこう}` ->
+                        // `{以降|いこう}`). Ambiguous malformed ruby and semantic
+                        // reading warnings are left untouched and only reported
+                        // below. Streaming-preview rendering is intentionally NOT
+                        // run through this — a partial `{漢字` mid-stream is not
+                        // malformed final output.
+                        const rubyRepair = repairRuby(humanMarkdown);
                         if (rubyRepair.remainingIssues.length > 0) {
                             const issueCounts = {};
                             for (const issue of rubyRepair.remainingIssues) {

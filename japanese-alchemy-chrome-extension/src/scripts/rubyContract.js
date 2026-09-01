@@ -408,6 +408,40 @@ function firstDiffIndex(a, b) {
 }
 
 /**
+ * Locate the fenced code block that is the final non-whitespace content of
+ * `src`, when and only when it is a block-level fence tagged `json`. Shared by
+ * `parseReadingContract` and `separateReadingContract` so both agree exactly on
+ * what "the final json block" is.
+ *
+ * @param {string} src
+ * @returns {{ jsonText: string, openIdx: number, closeEnd: number }|null}
+ *   `openIdx` is the source index of the opening ``` ; `closeEnd` is the source
+ *   index just past the closing ``` (trailing whitespace excluded). Returns null
+ *   when there is no such block (no fence, not final, not block-level, not json).
+ */
+function locateFinalJsonFence(src) {
+  const trimmedEnd = src.replace(/\s+$/, '');
+  if (!trimmedEnd || !/```$/.test(trimmedEnd)) return null;
+
+  const closeIdx = trimmedEnd.lastIndexOf('```');
+  const beforeClose = trimmedEnd.slice(0, closeIdx);
+  const openIdx = beforeClose.lastIndexOf('```');
+  if (openIdx === -1) return null;
+  if (openIdx !== 0 && beforeClose[openIdx - 1] !== '\n') return null;
+
+  const openLineEnd = beforeClose.indexOf('\n', openIdx);
+  if (openLineEnd === -1) return null;
+  const infoString = beforeClose.slice(openIdx + 3, openLineEnd).trim();
+  if (infoString.toLowerCase() !== 'json') return null;
+
+  return {
+    jsonText: beforeClose.slice(openLineEnd + 1),
+    openIdx,
+    closeEnd: closeIdx + 3,
+  };
+}
+
+/**
  * Locate and STRUCTURALLY validate the authoritative reading-contract JSON block
  * that SYSTEM_PROMPT_V2 appends as the final fenced ```json block of a response.
  *
@@ -439,30 +473,12 @@ export function parseReadingContract(markdown) {
   });
 
   // 1. The contract must be the final non-whitespace content and close with ```.
-  const trimmedEnd = src.replace(/\s+$/, '');
-  if (!trimmedEnd || !/```$/.test(trimmedEnd)) {
+  const fence = locateFinalJsonFence(src);
+  if (!fence) {
     return fail(RC.READING_CONTRACT_NOT_FOUND,
-      'No fenced code block is the final content of the response.');
+      'No block-level json code fence is the final content of the response.');
   }
-
-  const closeIdx = trimmedEnd.lastIndexOf('```');
-  const beforeClose = trimmedEnd.slice(0, closeIdx);
-  const openIdx = beforeClose.lastIndexOf('```');
-  if (openIdx === -1) {
-    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Unterminated final code fence.');
-  }
-  if (openIdx !== 0 && beforeClose[openIdx - 1] !== '\n') {
-    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Final code fence is not block-level.');
-  }
-  const openLineEnd = beforeClose.indexOf('\n', openIdx);
-  if (openLineEnd === -1) {
-    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Malformed final code fence.');
-  }
-  const infoString = beforeClose.slice(openIdx + 3, openLineEnd).trim();
-  if (infoString.toLowerCase() !== 'json') {
-    return fail(RC.READING_CONTRACT_NOT_FOUND, 'Final fenced block is not tagged as json.');
-  }
-  const jsonText = beforeClose.slice(openLineEnd + 1);
+  const { jsonText } = fence;
 
   // 2. Parse JSON. Never repair.
   let parsed;
@@ -529,5 +545,75 @@ export function parseReadingContract(markdown) {
     ok: true,
     contract: { version: READING_CONTRACT_VERSION, sourceText, tokens },
     issues: [],
+  };
+}
+
+/**
+ * Split a completed model response into its human-readable Markdown and the
+ * authoritative reading-contract JSON block, for the v0.2 Phase 2B-1 finalize
+ * path.
+ *
+ * The reading contract is METADATA: it must never reach `repairRuby`,
+ * `enrichMarkdownWithConjugation`, `formatAnalysisResult`, the rendered panel,
+ * Copy / Save-As, or `page.rendered_markdown`. This helper removes it — and
+ * ONLY it — when it can be proven valid; otherwise the response is returned
+ * untouched (never delete model/user-visible content we cannot prove is a
+ * reading contract).
+ *
+ * Phase 2B-1 does NOT reconcile inline `{漢字|かな}` ruby against the tokens.
+ *
+ * Stripping rule (deterministic): everything strictly before the opening ``` of
+ * the final json fence is kept verbatim, then trailing ASCII spaces, tabs, CR
+ * and LF (the Markdown block separator) are removed from that slice. Other
+ * whitespace (e.g. U+3000) is preserved.
+ *
+ * Pure and total: no DOM / storage / network / side effects; never throws.
+ *
+ * @param {string} markdown  the full completed model response
+ * @returns {{
+ *   markdown: string,
+ *   readingContract: ReadingContract|null,
+ *   contractIssues: ReadingContractIssue[],
+ *   hadContract: boolean,
+ * }}
+ *   `hadContract` is true when a final json fence clearly intended to be a
+ *   reading contract (its raw text references `reading_contract_version`),
+ *   whether or not it validated. `contractIssues` is non-empty only in that
+ *   "intended but invalid" case — plain absence and unrelated final JSON report
+ *   nothing to warn about.
+ */
+export function separateReadingContract(markdown) {
+  const src = typeof markdown === 'string' ? markdown : '';
+  const parsed = parseReadingContract(src);
+
+  if (parsed.ok) {
+    const fence = locateFinalJsonFence(src);
+    // parseReadingContract only returns ok when a fence was found; guard anyway.
+    if (!fence) {
+      return { markdown: src, readingContract: null, contractIssues: [], hadContract: false };
+    }
+    const humanMarkdown = src.slice(0, fence.openIdx).replace(/[ \t\r\n]+$/, '');
+    return {
+      markdown: humanMarkdown,
+      readingContract: parsed.contract,
+      contractIssues: [],
+      hadContract: true,
+    };
+  }
+
+  // Not a valid contract. Only treat it as a (broken) reading-contract attempt —
+  // and only then surface issues / a warning — when a final json fence exists
+  // whose raw text clearly intends to be one. Never strip anything here.
+  const fence = locateFinalJsonFence(src);
+  const intendsContract = Boolean(fence && /"reading_contract_version"\s*:/.test(fence.jsonText));
+
+  if (!intendsContract) {
+    return { markdown: src, readingContract: null, contractIssues: [], hadContract: false };
+  }
+  return {
+    markdown: src,
+    readingContract: null,
+    contractIssues: parsed.issues,
+    hadContract: true,
   };
 }

@@ -1039,3 +1039,151 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
     }
   });
 });
+
+describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract separation', () => {
+  const readingFence = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
+  const validContract = {
+    reading_contract_version: 1,
+    source_text: '3日以降',
+    tokens: [
+      { text: '3', reading: null },
+      { text: '日', reading: 'みっか' },
+      { text: '以降', reading: 'いこう' },
+    ],
+  };
+
+  beforeEach(() => {
+    jest.useRealTimers();
+    setupElements();
+    setupStorage({ promptVariant: 'v2' });
+    setupLocalStorage();
+    setupDeferredApi();
+  });
+
+  test('A: a valid final reading contract is stripped from the rendered panel and the stored response', async () => {
+    const apiCalls = setupDeferredApi();
+    const { prose } = setupElements();
+    const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+
+    const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    apiCalls[0].onDone(`${human}\n\n${readingFence(validContract)}`);
+    apiCalls[0].resolve();
+    await request;
+
+    expect(prose.innerHTML).not.toContain('reading_contract_version');
+    expect(global.localStorage.getItem('lastResponse')).toBe(human);
+    expect(global.localStorage.getItem('lastResponse')).not.toContain('reading_contract_version');
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.response).toBe(human);
+    expect(projection.html).not.toContain('reading_contract_version');
+    // projection schema unchanged — no readingContract field persisted
+    expect(Object.keys(projection).sort()).toEqual(['cacheKey', 'html', 'json', 'response', 'version']);
+  });
+
+  test('B: page.rendered_markdown saved later contains no reading contract', async () => {
+    const calls = [];
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    setupElements();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+    const human = '### 原句\n  - {沖縄|おきなわ}に{最接近|さいせっきん}\n\n### 單字分析\n#### <單字>{最接近|さいせっきん}する\n  - 解釋：x';
+
+    const request = analizingSelectedText('沖縄に最接近', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(`${human}\n\n${readingFence({
+      reading_contract_version: 1,
+      source_text: '沖縄に最接近',
+      tokens: [
+        { text: '沖縄', reading: 'おきなわ' },
+        { text: 'に', reading: null },
+        { text: '最接近', reading: 'さいせっきん' },
+      ],
+    })}`);
+    calls[0].resolve();
+    await request;
+    await handleSaveForLater();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.rendered_markdown).toBe(human);
+    expect(saved[0].page.rendered_markdown).not.toContain('reading_contract_version');
+    expect(saved[0].page.rendered_markdown).not.toContain('```');
+  });
+
+  test('C: safe ruby repair still runs AFTER the contract is stripped (order: separate → repair)', async () => {
+    const apiCalls = setupDeferredApi();
+    setupElements();
+    // duplicated-surface ruby in the human Markdown + a valid trailing contract
+    const human = '3{日|みっか}以降{以降|いこう}';
+
+    const request = analizingSelectedText('3日以降の天気', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    apiCalls[0].onDone(`${human}\n\n${readingFence(validContract)}`);
+    apiCalls[0].resolve();
+    await request;
+
+    // contract gone AND the duplicated surface repaired
+    expect(global.localStorage.getItem('lastResponse')).toBe('3{日|みっか}{以降|いこう}');
+    expect(global.localStorage.getItem('lastResponse')).not.toContain('reading_contract_version');
+  });
+
+  test('D: an invalid final reading contract is NOT stripped; analysis completes with one contract warning', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      const { result, saveForLaterBtn } = setupElements();
+      const human = '### 原句\n  - {雨|あめ}が{降|ふ}る';
+      // source_text does not match the token concatenation → SOURCE_MISMATCH
+      const badContract = {
+        reading_contract_version: 1,
+        source_text: '雨が降る',
+        tokens: [{ text: '雨', reading: 'あめ' }, { text: 'が', reading: null }, { text: '振る', reading: 'ふる' }],
+      };
+      const full = `${human}\n\n${readingFence(badContract)}`;
+
+      const request = analizingSelectedText('雨が降る', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(full);
+      apiCalls[0].resolve();
+      await request;
+
+      // analysis completed
+      expect(result.classList.contains('show')).toBe(true);
+      expect(saveForLaterBtn.disabled).toBe(false);
+      // the invalid block was left in place (never delete unproven content)
+      expect(global.localStorage.getItem('lastResponse')).toContain('reading_contract_version');
+      // exactly one aggregated "invalid reading contract" warning, codes only
+      const contractWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('invalid reading contract'));
+      expect(contractWarns).toHaveLength(1);
+      expect(contractWarns[0][0]).toContain('READING_CONTRACT_SOURCE_MISMATCH');
+      expect(contractWarns[0][0]).not.toMatch(/雨|降|振|source_text|apiKey|Bearer|Authorization/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('E: a V1-style response with no reading contract behaves exactly as before, no warning', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v1' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('### 原句\n  - {台風|たいふう}が{接近|せっきん}する');
+      apiCalls[0].resolve();
+      await request;
+
+      expect(global.localStorage.getItem('lastResponse')).toBe('### 原句\n  - {台風|たいふう}が{接近|せっきん}する');
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('reading contract'))).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

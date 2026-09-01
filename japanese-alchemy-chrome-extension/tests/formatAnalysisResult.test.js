@@ -69,6 +69,17 @@ describe('formatAnalysisResult', () => {
       expect(html).toContain('以降<ruby>'); // the un-repaired plain duplicate survives
     });
 
+    test('the streaming-preview renderer does NOT strip a v0.2 reading-contract block', () => {
+      // Phase 2B-1 confines separateReadingContract() to the completed onDone
+      // path. renderStreamingPreview() calls renderAnalysisMarkdown() directly,
+      // so a reading-contract block that arrives mid/late stream still renders
+      // (as a fenced code block) — it is only removed from the FINAL result.
+      const md = '### 原句\n  - {雨|あめ}\n\n```json\n{"reading_contract_version":1,"source_text":"雨","tokens":[]}\n```';
+      const html = renderAnalysisMarkdown(md);
+      expect(html).toContain('reading_contract_version');
+      expect(html).toContain('<rb>雨</rb>');
+    });
+
     test('does not preserve raw provider HTML in data sent to Save For Later', () => {
       const markdown = `
 ### 單字分析

@@ -13,6 +13,7 @@ import {
   repairRuby,
   ISSUE_CODES,
   parseReadingContract,
+  separateReadingContract,
   READING_CONTRACT_ISSUE_CODES as RC,
 } from '../src/scripts/rubyContract.js';
 
@@ -550,5 +551,150 @@ describe('rubyContract.parseReadingContract — semantic scope is deferred (Phas
     ));
     expect(rcCodes(r)).not.toContain('SUSPECT_COUNTER_READING');
     expect(rcCodes(r)).not.toContain(ISSUE_CODES.SUSPECT_COUNTER_READING);
+  });
+});
+
+// --- v0.2 Phase 2B-1: separateReadingContract ------------------------------
+
+describe('rubyContract.separateReadingContract', () => {
+  const HUMAN = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+  const fence = (obj) => '```json\n' + JSON.stringify(obj, null, 2) + '\n```';
+  const validContract = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+
+  test('A: a valid final reading contract is removed; human Markdown returned exactly', () => {
+    const r = separateReadingContract(`${HUMAN}\n\n${fence(validContract)}`);
+    expect(r.markdown).toBe(HUMAN);
+    expect(r.hadContract).toBe(true);
+    expect(r.contractIssues).toEqual([]);
+    expect(r.readingContract).toEqual({
+      version: 1,
+      sourceText: '台風接近',
+      tokens: [{ text: '台風', reading: 'たいふう' }, { text: '接近', reading: 'せっきん' }],
+    });
+    // no fragment of the JSON block survives
+    expect(r.markdown).not.toContain('reading_contract_version');
+    expect(r.markdown).not.toContain('```');
+  });
+
+  test('B: no contract → markdown byte-for-byte unchanged, hadContract false, no issues', () => {
+    const r = separateReadingContract(HUMAN);
+    expect(r.markdown).toBe(HUMAN);
+    expect(r.hadContract).toBe(false);
+    expect(r.contractIssues).toEqual([]);
+    expect(r.readingContract).toBeNull();
+  });
+
+  test('C: malformed JSON in a block that intends to be a contract → not stripped, INVALID_JSON, hadContract true', () => {
+    const input = `${HUMAN}\n\n\`\`\`json\n{ "reading_contract_version": 1, oops }\n\`\`\``;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(input); // never delete unparseable content
+    expect(r.readingContract).toBeNull();
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_INVALID_JSON]);
+    expect(r.hadContract).toBe(true);
+  });
+
+  test('D: unsupported version → not stripped, issue returned', () => {
+    const input = `${HUMAN}\n\n${fence(contractOf('台風', [tok('台風', 'たいふう')], 2))}`;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(input);
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+    expect(r.hadContract).toBe(true);
+  });
+
+  test('E: source mismatch → not stripped, issue returned', () => {
+    const bad = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接続', 'せつぞく')]);
+    const input = `${HUMAN}\n\n${fence(bad)}`;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(input);
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_SOURCE_MISMATCH]);
+    expect(r.hadContract).toBe(true);
+  });
+
+  test('F: an earlier unrelated JSON fence is kept; only the final valid contract is removed', () => {
+    const earlier = '```json\n{"debug":true}\n```';
+    const input = `### 原句\n${earlier}\n\nmore prose\n\n${fence(validContract)}`;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(`### 原句\n${earlier}\n\nmore prose`);
+    expect(r.markdown).toContain('{"debug":true}');
+    expect(r.markdown).not.toContain('reading_contract_version');
+    expect(r.hadContract).toBe(true);
+  });
+
+  test('G: a valid contract followed by trailing prose → nothing stripped', () => {
+    const input = `${HUMAN}\n\n${fence(validContract)}\n\nps: extra note`;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(input);
+    expect(r.readingContract).toBeNull();
+    expect(r.hadContract).toBe(false);
+    expect(r.contractIssues).toEqual([]);
+  });
+
+  test('H: an unrelated final JSON object → nothing stripped, no issues', () => {
+    const input = `${HUMAN}\n\n\`\`\`json\n{"foo":"bar"}\n\`\`\``;
+    const r = separateReadingContract(input);
+    expect(r.markdown).toBe(input);
+    expect(r.hadContract).toBe(false);
+    expect(r.contractIssues).toEqual([]);
+  });
+
+  describe('I: whitespace boundary — only the contract-side separator is removed', () => {
+    test.each([
+      ['single newline', 'human', 'human\n'],
+      ['double newline', 'human', 'human\n\n'],
+      ['trailing spaces then blank line', 'human line', 'human line   \n\n'],
+      ['full-width space before the fence is preserved', 'human　', 'human　\n'],
+      ['no human content at all', '', ''],
+    ])('%s', (_name, expectedMarkdown, prefix) => {
+      const r = separateReadingContract(`${prefix}${fence(validContract)}`);
+      expect(r.markdown).toBe(expectedMarkdown);
+      expect(r.hadContract).toBe(true);
+    });
+  });
+
+  test('J: Unicode in the preserved Markdown and in the parsed contract is byte-for-byte', () => {
+    const src = '３号🌀とＡ';
+    const c = contractOf(src, [tok('３'), tok('号', 'ごう'), tok('🌀'), tok('と'), tok('Ａ')]);
+    const r = separateReadingContract(`原文：${src}\n\n${fence(c)}`);
+    expect(r.markdown).toBe(`原文：${src}`);
+    expect(r.readingContract.sourceText).toBe(src);
+  });
+
+  test('K: idempotent — separating an already-separated response is a no-op with no contract', () => {
+    const once = separateReadingContract(`${HUMAN}\n\n${fence(validContract)}`);
+    const twice = separateReadingContract(once.markdown);
+    expect(twice.markdown).toBe(once.markdown);
+    expect(twice.hadContract).toBe(false);
+    expect(twice.readingContract).toBeNull();
+  });
+
+  test('non-string input is handled without throwing', () => {
+    for (const bad of [undefined, null, 42, {}]) {
+      const r = separateReadingContract(bad);
+      expect(r).toMatchObject({ markdown: '', readingContract: null, hadContract: false });
+      expect(r.contractIssues).toEqual([]);
+    }
+  });
+
+  test('ORDERING: the reading contract never reaches repairRuby / conjugation / parser', () => {
+    // Human Markdown carries a duplicated-surface 辭書形 (Phase 1B repairs it).
+    const human = '### 單字分析\n#### <單字>{動|うご}く\n  - 動詞分類：五段動詞\n  - 辭書形：動{動|うご}く\n\n### 文法分析\n（無）';
+    const contract = contractOf('動く', [tok('動', 'うご'), tok('く')]);
+    const full = `${human}\n\n${fence(contract)}`;
+
+    // step 1: separate
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(human);
+    expect(sep.markdown).not.toContain('reading_contract_version');
+
+    // step 2: repairRuby only ever sees the separated human Markdown
+    const repaired = repairRuby(sep.markdown);
+    expect(repaired.text).not.toContain('reading_contract_version');
+    expect(repaired.text).toContain('辭書形：{動|うご}く');
+    expect(repaired.text).not.toContain('動{動|うご}く');
+
+    // If repair had run on `full` (wrong order), the contract JSON braces would
+    // have produced spurious ruby issues — prove the separated input is clean.
+    expect(validateRuby(sep.markdown).issues.map((i) => i.code)).not.toContain(ISSUE_CODES.MISSING_PIPE);
+    expect(validateRuby(full).issues.map((i) => i.code)).toContain(ISSUE_CODES.MISSING_PIPE);
   });
 });
