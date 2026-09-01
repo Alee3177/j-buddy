@@ -59,6 +59,16 @@ describe('formatAnalysisResult', () => {
       expect(html).toContain('partial');
     });
 
+    test('the streaming-preview renderer does NOT apply v0.2 ruby-contract repair', () => {
+      // Phase 1B confines repairRuby() to the completed-analysis onDone path.
+      // renderAnalysisMarkdown() is what renderStreamingPreview() and the cancel
+      // path call, so it must render exactly what the model streamed — a partial
+      // `{漢字` mid-stream must not be treated as malformed final output.
+      const html = renderAnalysisMarkdown('3{日|みっか}以降{以降|いこう}');
+      expect(html).toContain('<rb>以降</rb>');
+      expect(html).toContain('以降<ruby>'); // the un-repaired plain duplicate survives
+    });
+
     test('does not preserve raw provider HTML in data sent to Save For Later', () => {
       const markdown = `
 ### 單字分析

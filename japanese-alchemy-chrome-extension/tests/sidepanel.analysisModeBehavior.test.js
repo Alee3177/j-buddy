@@ -913,3 +913,129 @@ describe('sidepanel analysis-mode behavior', () => {
     expect(result.classList.contains('show')).toBe(false);
   });
 });
+
+describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract finalize wiring', () => {
+  beforeEach(() => {
+    jest.useRealTimers();
+    setupElements();
+    setupStorage({ promptVariant: 'v2' });
+    setupLocalStorage();
+    setupDeferredApi();
+  });
+
+  test('A/F: the completed analysis normalizes duplicated-surface ruby before render + store', async () => {
+    const apiCalls = setupDeferredApi();
+    const { prose } = setupElements();
+
+    const request = analizingSelectedText('3日以降の天気', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    apiCalls[0].onDone('3{日|みっか}以降{以降|いこう}');
+    apiCalls[0].resolve();
+    await request;
+
+    // canonical markdown (Copy / Save-As / save payload source) is repaired
+    expect(global.localStorage.getItem('lastResponse')).toBe('3{日|みっか}{以降|いこう}');
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.response).toBe('3{日|みっか}{以降|いこう}');
+    // rendered panel carries no leftover plain-text duplicate
+    expect(prose.innerHTML).toContain('<rb>以降</rb>');
+    expect(prose.innerHTML).not.toContain('以降<ruby>');
+  });
+
+  test('F: Save For Later persists the normalized markdown in page.rendered_markdown', async () => {
+    const calls = [];
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, onError, options, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    setupElements();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+
+    const request = analizingSelectedText('3日以降について', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone('3{日|みっか}以降{以降|いこう}について{解説|かいせつ}する');
+    calls[0].resolve();
+    await request;
+
+    await handleSaveForLater();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.rendered_markdown).toBe('3{日|みっか}{以降|いこう}について{解説|かいせつ}する');
+    expect(saved[0].page.rendered_markdown).not.toContain('以降{以降');
+  });
+
+  test('C/D: ambiguous malformed ruby is left byte-for-byte unchanged and does not block completion', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      const { result, saveForLaterBtn, copyButton } = setupElements();
+
+      const request = analizingSelectedText('川が流れ込む地域', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('{流|なが}れ込|こ}み');
+      apiCalls[0].resolve();
+      await request;
+
+      // source untouched
+      expect(global.localStorage.getItem('lastResponse')).toBe('{流|なが}れ込|こ}み');
+      expect(JSON.parse(global.localStorage.getItem('lastAnalysisResult')).response)
+        .toBe('{流|なが}れ込|こ}み');
+      // still completes: result shown, completion-only actions enabled
+      expect(result.classList.contains('show')).toBe(true);
+      expect(saveForLaterBtn.disabled).toBe(false);
+      expect(copyButton.disabled).toBe(false);
+
+      // exactly one aggregated developer warning, issue codes only, no secrets
+      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      expect(rubyWarns).toHaveLength(1);
+      expect(rubyWarns[0][0]).toContain('MISSING_OPEN_BRACE');
+      expect(rubyWarns[0][0]).toContain('UNBALANCED_BRACE');
+      expect(rubyWarns[0][0]).not.toMatch(/apiKey|Bearer|Authorization/i);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('D: a semantic reading warning (3{日|にち}) is reported but the reading is never rewritten', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+
+      const request = analizingSelectedText('3日以降の予報', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('3{日|にち}{以降|いこう}');
+      apiCalls[0].resolve();
+      await request;
+
+      expect(global.localStorage.getItem('lastResponse')).toBe('3{日|にち}{以降|いこう}');
+      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      expect(rubyWarns).toHaveLength(1);
+      expect(rubyWarns[0][0]).toContain('SUSPECT_COUNTER_READING');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('E: valid completed output is unchanged and logs no ruby-contract warning', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('{台風|たいふう}が{接近|せっきん}する');
+      apiCalls[0].resolve();
+      await request;
+
+      expect(global.localStorage.getItem('lastResponse')).toBe('{台風|たいふう}が{接近|せっきん}する');
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

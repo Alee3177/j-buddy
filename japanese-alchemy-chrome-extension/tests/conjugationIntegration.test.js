@@ -9,6 +9,7 @@
  * drives BOTH the rendered HTML and the saved-item detail, from a single pass.
  */
 import { enrichMarkdownWithConjugation } from '../src/scripts/conjugation.js';
+import { repairRuby } from '../src/scripts/rubyContract.js';
 import { formatAnalysisResult } from '../src/sidepanel/sidepanel.js';
 
 describe('conjugation integration (U4): enrich -> formatAnalysisResult', () => {
@@ -119,6 +120,43 @@ describe('conjugation integration (U4): enrich -> formatAnalysisResult', () => {
     const detailHasForms = verb.detail.includes('ます形');
     expect(htmlHasForms).toBe(detailHasForms);
     expect(htmlHasForms).toBe(true);
+  });
+
+  test('v0.2 Phase 1B: ruby repair runs BEFORE conjugation enrichment (onDone ordering)', () => {
+    // A 辭書形 whose ruby token is preceded by a byte-for-byte duplicate of its
+    // base — the same class as the production failure `以降{以降|いこう}`. The
+    // completed-analysis onDone path applies repairRuby() first, then
+    // enrichMarkdownWithConjugation(), then formatAnalysisResult().
+    const malformed = `### 單字分析
+#### <單字>{動|うご}く
+  - 讀音：うごく
+  - 動詞分類：五段動詞
+  - 解釋：移動する
+  - 辭書形：動{動|うご}く
+
+### 文法分析
+`;
+
+    // Correct order: repair first so the dictionary form is clean.
+    const repaired = repairRuby(malformed).text;
+    expect(repaired).toContain('辭書形：{動|うご}く');
+    expect(repaired).not.toContain('辭書形：動{動|うご}く');
+
+    const enriched = enrichMarkdownWithConjugation(repaired);
+    expect(enriched).toContain('ます形：{動|うご}きます');
+    expect(enriched).toContain('使役受身形：{動|うご}かされる');
+    expect(enriched).not.toContain('動{動|うご}きます');
+
+    const result = formatAnalysisResult(enriched);
+    const verb = result.json.words.find((w) => w.term.includes('動'));
+    expect(verb.detail).toContain('辭書形：{動|うご}く');
+    expect(verb.detail).toContain('ます形：{動|うご}きます');
+    expect(verb.detail).not.toContain('動{動|うご}きます');
+
+    // Wrong order (enrich before repair) would splice conjugation over the
+    // duplicated base and emit garbage — this pins why the order matters.
+    const wrongOrder = enrichMarkdownWithConjugation(malformed);
+    expect(wrongOrder).toContain('動{動|うご}きます');
   });
 
   test('usage-oriented V2 fields survive enrichment after generated forms are injected', () => {

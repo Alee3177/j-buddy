@@ -34,6 +34,7 @@ import { DirectLlmApiService } from '../scripts/directLlmApiService.js';
 import { normalizeModelCatalogIds } from '../scripts/modelCatalog.js';
 import { buildContextCacheKey } from '../scripts/surroundingContext.js';
 import { enrichMarkdownWithConjugation } from '../scripts/conjugation.js';
+import { repairRuby } from '../scripts/rubyContract.js';
 
 // Configure marked.js to preserve ruby tags and add classes
 marked.setOptions({
@@ -714,12 +715,37 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                     // onDone: finalize with full formatting (checkboxes, structured data)
                     (fullText) => {
                         if (!isLatestAnalysis(requestId)) return;
-                        // Enrich the raw stream with engine-generated verb
-                        // conjugation before any consumer reads it, so the
+                        // v0.2 Phase 1B: normalize the FINAL completed text with
+                        // the deterministic ruby contract before any consumer
+                        // reads it. This only applies conservative, unambiguous
+                        // repairs (currently: a plain-text surface that exactly
+                        // duplicates the base of the ruby token right after it,
+                        // e.g. `以降{以降|いこう}` -> `{以降|いこう}`). Ambiguous
+                        // malformed ruby and semantic reading warnings are left
+                        // untouched and only reported below. Streaming-preview
+                        // rendering is intentionally NOT run through this — a
+                        // partial `{漢字` mid-stream is not malformed final output.
+                        const rubyRepair = repairRuby(fullText);
+                        if (rubyRepair.remainingIssues.length > 0) {
+                            const issueCounts = {};
+                            for (const issue of rubyRepair.remainingIssues) {
+                                issueCounts[issue.code] = (issueCounts[issue.code] || 0) + 1;
+                            }
+                            const summary = Object.entries(issueCounts)
+                                .map(([code, count]) => `${code}×${count}`)
+                                .join(', ');
+                            console.warn(
+                                `[ruby-contract] ${rubyRepair.remainingIssues.length} unresolved ruby `
+                                + `issue(s) after ${rubyRepair.repairs.length} safe repair(s): ${summary}`
+                            );
+                        }
+                        // Enrich the (ruby-normalized) stream with engine-generated
+                        // verb conjugation before any consumer reads it, so the
                         // rendered panel, the saved item, Copy, Save-As, and the
                         // cached response all carry the generated table from one
-                        // pass (see KTD2).
-                        const enrichedText = enrichMarkdownWithConjugation(fullText);
+                        // pass (see KTD2). Repair runs first so a duplicated-surface
+                        // 辭書形 is corrected before conjugation splices forms.
+                        const enrichedText = enrichMarkdownWithConjugation(rubyRepair.text);
                         activeAnalysisPreviewText = '';
                         const formattedResult = formatAnalysisResult(enrichedText);
                         const normalizedJson = normalizeStructuredAnalysisResult(formattedResult.json);
