@@ -191,6 +191,30 @@ describe("FirestoreService", () => {
       expect(stored.structured_json.reading).toBe(structuredJson.reading);
     });
 
+    it("persists nested structured_json.collocations / registers unchanged", async () => {
+      const add = jest.fn();
+      mockDb.collection.mockReturnValue({ add });
+      const structuredJson = {
+        words: [],
+        grammars: [],
+        collocations: [
+          { text: "〜に{最接近|さいせっきん}する：固定搭配。" },
+          { text: "{前線|ぜんせん}を{刺激|しげき}する：活化鋒面。" },
+        ],
+        registers: [{ text: "句尾「〜か」：標題式的不確定。" }],
+      };
+
+      await service.saveAnalysisPage("test-user", {
+        rendered_markdown: "# Analysis",
+        structured_json: structuredJson,
+      });
+
+      const stored = (add.mock.calls[0] as any[])[0];
+      expect(stored.structured_json).toEqual(structuredJson);
+      expect(stored.structured_json.collocations).toBe(structuredJson.collocations);
+      expect(stored.structured_json.registers).toBe(structuredJson.registers);
+    });
+
     it("stores structured JSON on shared pages", async () => {
       const add = jest.fn();
       mockDb.collection.mockReturnValue({ add });

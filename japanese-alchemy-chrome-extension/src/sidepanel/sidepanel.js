@@ -151,6 +151,36 @@ export function convertToRuby(text) {
     });
 }
 
+/**
+ * Parse a v0.3 Phase 2A taxonomy section (`### 搭配分析`, `### 語體／新聞表現`)
+ * into `{ text }` items — one per top-level markdown bullet.
+ *
+ * Deliberately coarse: the provider packs form / meaning / register / example
+ * into a single inline bullet with only a soft `：` convention, so no sub-field
+ * splitting is attempted. Only direct list items (`- ` with 0–3 leading spaces)
+ * are taken; nested bullets, non-`-` markers, blank bullets, and the `（無）`
+ * sentinel are skipped. Inline ruby `{漢字|かな}` is preserved;
+ * `sanitizeAnalysisTextForStorage` drops any provider HTML (mirrors words /
+ * grammars). Returns `[]` when the section carries no valid bullets.
+ *
+ * @param {string} section  the `### …` section chunk from the heading split
+ * @returns {Array<{ text: string }>}
+ */
+function parseTaxonomyBulletSection(section) {
+    const firstNewline = section.indexOf('\n');
+    const body = firstNewline === -1 ? '' : section.slice(firstNewline + 1);
+    const items = [];
+    for (const rawLine of body.split('\n')) {
+        const line = rawLine.replace(/\r$/, '');
+        const match = /^ {0,3}-\s+(.+)$/.exec(line);
+        if (!match) continue;
+        const text = sanitizeAnalysisTextForStorage(match[1].trim());
+        if (!text || text === '（無）') continue;
+        items.push({ text });
+    }
+    return items;
+}
+
 // Function to format the analysis result using marked.js
 export function formatAnalysisResult(markdown) {
     // Handle null/undefined input
@@ -202,6 +232,19 @@ export function formatAnalysisResult(markdown) {
                 jsonData.grammars.push({ "point": point, "explanation": explanation });
             }
         });
+    }
+
+    // v0.3 Phase 2A: additive collocation / register taxonomy. These sections
+    // only exist in the personal-provider (6-section) contract; the managed
+    // provider omits them, so the key is added ONLY when the heading is present.
+    // Heading present but empty / （無） → the key is an empty array.
+    const collocationSection = sections.find(section => section.trim().startsWith('### 搭配分析'));
+    if (collocationSection) {
+        jsonData.collocations = parseTaxonomyBulletSection(collocationSection);
+    }
+    const registerSection = sections.find(section => section.trim().startsWith('### 語體'));
+    if (registerSection) {
+        jsonData.registers = parseTaxonomyBulletSection(registerSection);
     }
 
     // console.log('jsonData after word section:', jsonData);
@@ -281,6 +324,28 @@ function normalizeStructuredAnalysisResult(json) {
         } else {
             delete normalizedJson.reading;
         }
+    }
+
+    // v0.3 Phase 2A: optional `collocations` / `registers` taxonomy lists. Absent
+    // → left absent (old cached projections, managed-provider results). Present
+    // but not an array → dropped fail-closed. Present as an array → filtered to
+    // freshly-cloned `{ text: non-empty string }` items (an all-invalid array
+    // normalizes to []). Malformed taxonomy data never invalidates otherwise
+    // valid words / grammars.
+    for (const key of ['collocations', 'registers']) {
+        if (!(key in normalizedJson)) continue;
+        const raw = normalizedJson[key];
+        if (!Array.isArray(raw)) {
+            delete normalizedJson[key];
+            continue;
+        }
+        normalizedJson[key] = raw.reduce((items, item) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)
+                && typeof item.text === 'string' && item.text.length > 0) {
+                items.push({ text: item.text });
+            }
+            return items;
+        }, []);
     }
 
     return Array.isArray(normalizedJson.words)

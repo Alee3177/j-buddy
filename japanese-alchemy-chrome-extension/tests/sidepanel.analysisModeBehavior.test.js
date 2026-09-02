@@ -1738,3 +1738,171 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
     expect(projection.json.reading).toEqual(groundedReading);
   });
 });
+
+describe('sidepanel analysis-mode behavior — v0.3 Phase 2A collocation / register taxonomy', () => {
+  // Personal-provider (6-section) style body. The 單字 entry is a plain noun so
+  // enrichMarkdownWithConjugation is a strict no-op and the markdown surfaces
+  // stay byte-identical.
+  const sixSection = [
+    '### 原句',
+    '  - {台風|たいふう}が{沖縄|おきなわ}に{最接近|さいせっきん}する。',
+    '  - 翻譯：颱風最接近沖繩。',
+    '',
+    '### 單字分析',
+    '#### <單字>{前線|ぜんせん}',
+    '  - 解釋：鋒面',
+    '',
+    '### 文法分析',
+    '（無）',
+    '',
+    '### 搭配分析',
+    '  - 〜に{最接近|さいせっきん}する：固定搭配，常見於氣象報導。',
+    '  - {前線|ぜんせん}を{刺激|しげき}する：活化鋒面。',
+    '',
+    '### 語體／新聞表現',
+    '  - 句尾「〜か」：標題式的不確定與省略。',
+    '  - 連用中止（「{刺激|しげき}し、」）：書面語語法。',
+    '',
+  ].join('\n');
+
+  const collocations = [
+    { text: '〜に{最接近|さいせっきん}する：固定搭配，常見於氣象報導。' },
+    { text: '{前線|ぜんせん}を{刺激|しげき}する：活化鋒面。' },
+  ];
+  const registers = [
+    { text: '句尾「〜か」：標題式的不確定與省略。' },
+    { text: '連用中止（「{刺激|しげき}し、」）：書面語語法。' },
+  ];
+
+  beforeEach(() => {
+    jest.useRealTimers();
+    setupElements();
+    setupStorage({ promptVariant: 'v2' });
+    setupLocalStorage();
+    setupDeferredApi();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+  });
+
+  function deferredSaveApi() {
+    const calls = [];
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    return { calls, saved };
+  }
+
+  test('A: a 6-section result populates projection.json.collocations / registers and round-trips through Save For Later', async () => {
+    const { calls, saved } = deferredSaveApi();
+    setupElements();
+
+    const request = analizingSelectedText('台風が沖縄に最接近する。', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(sixSection);
+    calls[0].resolve();
+    await request;
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.version).toBe(1); // NOT bumped
+    expect(Object.keys(projection).sort()).toEqual(['cacheKey', 'html', 'json', 'response', 'version']);
+    expect(projection.json.collocations).toEqual(collocations);
+    expect(projection.json.registers).toEqual(registers);
+
+    await handleSaveForLater();
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.structured_json.collocations).toEqual(collocations);
+    expect(saved[0].page.structured_json.registers).toEqual(registers);
+    // legacy flat vocab/grammar mapping untouched
+    expect(Array.isArray(saved[0].words)).toBe(true);
+    expect(Array.isArray(saved[0].grammars)).toBe(true);
+  });
+
+  test('B: versioned cache restore preserves valid collocations / registers', async () => {
+    const cacheKey = buildContextCacheKey({ selectedText: '台風が沖縄に最接近する。', promptVariant: 'v2' });
+    setupLocalStorage({
+      lastAnalysisResult: completedProjection(cacheKey, {
+        json: { words: [{ term: '成長', detail: 'growth' }], grammars: [], collocations, registers },
+      }),
+    });
+    setupElements();
+    const saved = [];
+    global.JaAlchemyApiService = class { async saveAnalysis(a) { saved.push(a); return { success: true }; } };
+
+    await analizingSelectedText('台風が沖縄に最接近する。', {}, { promptVariant: 'v2' });
+    await handleSaveForLater();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.structured_json.collocations).toEqual(collocations);
+    expect(saved[0].page.structured_json.registers).toEqual(registers);
+  });
+
+  test('C: malformed cached collocations / registers are dropped; words / grammars stay valid', async () => {
+    const cacheKey = buildContextCacheKey({ selectedText: '台風が沖縄に最接近する。', promptVariant: 'v2' });
+    setupLocalStorage({
+      lastAnalysisResult: completedProjection(cacheKey, {
+        json: {
+          words: [{ term: '成長', detail: 'growth' }],
+          grammars: [],
+          collocations: 'not-an-array',
+          registers: [{ text: '' }, { nope: 1 }, 42, { text: 'ok' }],
+        },
+      }),
+    });
+    setupElements();
+    const saved = [];
+    global.JaAlchemyApiService = class { async saveAnalysis(a) { saved.push(a); return { success: true }; } };
+
+    await analizingSelectedText('台風が沖縄に最接近する。', {}, { promptVariant: 'v2' });
+    await handleSaveForLater();
+
+    expect(saved).toHaveLength(1);
+    const sj = saved[0].page.structured_json;
+    expect('collocations' in sj).toBe(false);        // non-array → dropped fail-closed
+    expect(sj.registers).toEqual([{ text: 'ok' }]);  // bad items filtered out
+    expect(sj.words).toEqual([{ term: '成長', detail: 'growth' }]);
+    expect(sj.grammars).toEqual([]);
+  });
+
+  test('D: managed-style markdown without those sections keeps the exact legacy { words, grammars } shape', async () => {
+    const apiCalls = setupDeferredApi();
+    setupElements();
+    const managed = '### 單字分析\n#### <單字>{成長|せいちょう}\n  - 解釋：成長\n\n### 文法分析\n（無）';
+
+    const request = analizingSelectedText('成長する社会', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    apiCalls[0].onDone(managed);
+    apiCalls[0].resolve();
+    await request;
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect('collocations' in projection.json).toBe(false);
+    expect('registers' in projection.json).toBe(false);
+    expect('reading' in projection.json).toBe(false);
+    expect(Object.keys(projection.json).sort()).toEqual(['grammars', 'words']);
+  });
+
+  test('E: taxonomy parsing does not alter any markdown / UI string surface', async () => {
+    const { calls, saved } = deferredSaveApi();
+    const { prose } = setupElements();
+
+    const request = analizingSelectedText('台風が沖縄に最接近する。', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(sixSection);
+    calls[0].resolve();
+    await request;
+    await handleSaveForLater();
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(global.localStorage.getItem('lastResponse')).toBe(sixSection);
+    expect(projection.response).toBe(sixSection);
+    expect(saved[0].page.rendered_markdown).toBe(sixSection);
+    // the section text still renders as a normal list in the panel
+    expect(prose.innerHTML).toContain('<rb>前線</rb>');
+    // structured data still captured alongside the unchanged markdown
+    expect(projection.json.collocations).toHaveLength(2);
+    expect(projection.json.registers).toHaveLength(2);
+  });
+});
