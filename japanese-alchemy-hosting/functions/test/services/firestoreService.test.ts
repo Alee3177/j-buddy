@@ -163,6 +163,34 @@ describe("FirestoreService", () => {
       }));
     });
 
+    it("persists a nested structured_json.reading contract unchanged", async () => {
+      const add = jest.fn();
+      mockDb.collection.mockReturnValue({ add });
+      const structuredJson = {
+        words: [],
+        grammars: [],
+        reading: {
+          version: 1 as const,
+          source_text: "台風が接近する",
+          tokens: [
+            { text: "台風", reading: "たいふう" },
+            { text: "が", reading: null },
+            { text: "接近", reading: "せっきん" },
+            { text: "する", reading: null },
+          ],
+        },
+      };
+
+      await service.saveAnalysisPage("test-user", {
+        rendered_markdown: "# Analysis",
+        structured_json: structuredJson,
+      });
+
+      const stored = (add.mock.calls[0] as any[])[0];
+      expect(stored.structured_json).toEqual(structuredJson);
+      expect(stored.structured_json.reading).toBe(structuredJson.reading);
+    });
+
     it("stores structured JSON on shared pages", async () => {
       const add = jest.fn();
       mockDb.collection.mockReturnValue({ add });

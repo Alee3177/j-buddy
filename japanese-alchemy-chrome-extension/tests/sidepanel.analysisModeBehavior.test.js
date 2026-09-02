@@ -1098,7 +1098,8 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
     const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
     expect(projection.response).toBe(human);
     expect(projection.html).not.toContain('reading_contract_version');
-    // projection schema unchanged — no readingContract field persisted
+    // projection top-level schema/version unchanged (v0.3 reading data, when
+    // persisted, rides INSIDE json.reading — never as a new top-level field)
     expect(Object.keys(projection).sort()).toEqual(['cacheKey', 'html', 'json', 'response', 'version']);
   });
 
@@ -1453,5 +1454,287 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
     expect(response).toContain('  - 3{日|みっか}{以降|いこう}');
     expect(response).not.toContain('にち');
     expect(response).not.toContain('以降{以降');
+  });
+});
+
+describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritative reading tokens', () => {
+  const readingFence = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
+
+  // Grounded fixture: fence source_text === the selected text, and the token
+  // text concatenation === source_text (the parser's own contract).
+  const groundedContract = {
+    reading_contract_version: 1,
+    source_text: '台風が接近する',
+    tokens: [
+      { text: '台風', reading: 'たいふう' },
+      { text: 'が', reading: null },
+      { text: '接近', reading: 'せっきん' },
+      { text: 'する', reading: null },
+    ],
+  };
+  // The exact shape v0.3 Phase 1 persists at structured_json.reading.
+  const groundedReading = {
+    version: 1,
+    source_text: '台風が接近する',
+    tokens: [
+      { text: '台風', reading: 'たいふう' },
+      { text: 'が', reading: null },
+      { text: '接近', reading: 'せっきん' },
+      { text: 'する', reading: null },
+    ],
+  };
+
+  beforeEach(() => {
+    jest.useRealTimers();
+    setupElements();
+    setupStorage({ promptVariant: 'v2' });
+    setupLocalStorage();
+    setupDeferredApi();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+  });
+
+  function deferredSaveApi() {
+    const calls = [];
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    return { calls, saved };
+  }
+
+  test('A: a valid, selection-grounded contract persists structured_json.reading exactly', async () => {
+    const { calls, saved } = deferredSaveApi();
+    setupElements();
+    const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+
+    const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(`${human}\n\n${readingFence(groundedContract)}`);
+    calls[0].resolve();
+    await request;
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.version).toBe(1); // NOT bumped
+    expect(Object.keys(projection).sort()).toEqual(['cacheKey', 'html', 'json', 'response', 'version']);
+    expect(projection.json.reading).toEqual(groundedReading);
+
+    await handleSaveForLater();
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.structured_json.reading).toEqual(groundedReading);
+  });
+
+  test('B: a valid contract whose source_text is not the selected text persists no reading', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      const human = '### 原句\n  - {台風|たいふう}25{号|ごう}{発生|はっせい}\n\n### 文法分析\n（無）';
+      const contract = {
+        reading_contract_version: 1,
+        source_text: '台風25号発生',
+        tokens: [
+          { text: '台風', reading: 'たいふう' },
+          { text: '25', reading: null },
+          { text: '号', reading: 'ごう' },
+          { text: '発生', reading: 'はっせい' },
+        ],
+      };
+
+      // ground truth: the user selected 24, not 25
+      const request = analizingSelectedText('台風24号発生', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(`${human}\n\n${readingFence(contract)}`);
+      apiCalls[0].resolve();
+      await request;
+
+      const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+      expect('reading' in projection.json).toBe(false);
+
+      // existing reconciliation warning behavior unchanged
+      const reconcileWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
+      expect(reconcileWarns).toHaveLength(1);
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('C: an invalid final contract persists no reading and is still left in place', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      const human = '### 原句\n  - {雨|あめ}が{降|ふ}る';
+      // token concatenation (雨が振る) !== source_text (雨が降る) → SOURCE_MISMATCH
+      const badContract = {
+        reading_contract_version: 1,
+        source_text: '雨が降る',
+        tokens: [{ text: '雨', reading: 'あめ' }, { text: 'が', reading: null }, { text: '振る', reading: 'ふる' }],
+      };
+
+      const request = analizingSelectedText('雨が降る', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(`${human}\n\n${readingFence(badContract)}`);
+      apiCalls[0].resolve();
+      await request;
+
+      const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+      expect('reading' in projection.json).toBe(false);
+      // existing invalid-block behavior unchanged: not stripped, one contract warning
+      expect(global.localStorage.getItem('lastResponse')).toContain('reading_contract_version');
+      const contractWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('invalid reading contract'));
+      expect(contractWarns).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('D: a response with no reading contract persists no reading (V1 behavior unchanged)', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する';
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v1' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(human);
+      apiCalls[0].resolve();
+      await request;
+
+      expect(global.localStorage.getItem('lastResponse')).toBe(human);
+      const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+      expect('reading' in projection.json).toBe(false);
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('E: a selection-grounded contract still persists reading when the ### 原句 line differs', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { calls, saved } = deferredSaveApi();
+      setupElements();
+      // grounding passes (selection === contract source_text); the model's
+      // ### 原句 line shows a paraphrase, so reconcile skips the line rewrite
+      const human = '### 原句\n  - {台風|たいふう}が{沖縄|おきなわ}に{接近|せっきん}中\n\n### 文法分析\n（無）';
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      calls[0].onDone(`${human}\n\n${readingFence(groundedContract)}`);
+      calls[0].resolve();
+      await request;
+
+      const response = global.localStorage.getItem('lastResponse');
+      // source line NOT rewritten — reconciliation skipped
+      expect(response).toContain('  - {台風|たいふう}が{沖縄|おきなわ}に{接近|せっきん}中');
+      const reconcileWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
+      expect(reconcileWarns).toHaveLength(1);
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
+
+      // reading IS persisted — grounded to the browser selection, not the UI line
+      const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+      expect(projection.json.reading).toEqual(groundedReading);
+      await handleSaveForLater();
+      expect(saved[0].page.structured_json.reading).toEqual(groundedReading);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  describe('F: cache restore', () => {
+    test('a versioned projection with a valid reading preserves it through restore + Save For Later', async () => {
+      const cacheKey = buildContextCacheKey({ selectedText: '台風が接近する', promptVariant: 'v2' });
+      setupLocalStorage({
+        lastAnalysisResult: completedProjection(cacheKey, {
+          json: { words: [{ term: '成長', detail: 'growth' }], grammars: [], reading: groundedReading },
+        }),
+      });
+      setupElements();
+      const saved = [];
+      global.JaAlchemyApiService = class { async saveAnalysis(a) { saved.push(a); return { success: true }; } };
+
+      await analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await handleSaveForLater();
+
+      expect(saved).toHaveLength(1);
+      expect(saved[0].page.structured_json.reading).toEqual(groundedReading);
+    });
+
+    test('a malformed cached reading is dropped on restore; the rest of the save is intact', async () => {
+      const cacheKey = buildContextCacheKey({ selectedText: '台風が接近する', promptVariant: 'v2' });
+      setupLocalStorage({
+        lastAnalysisResult: completedProjection(cacheKey, {
+          json: {
+            words: [{ term: '成長', detail: 'growth' }],
+            grammars: [],
+            // token concatenation (台風) !== source_text → malformed
+            reading: { version: 1, source_text: '台風が接近する', tokens: [{ text: '台風', reading: 'たいふう' }] },
+          },
+        }),
+      });
+      setupElements();
+      const saved = [];
+      global.JaAlchemyApiService = class { async saveAnalysis(a) { saved.push(a); return { success: true }; } };
+
+      await analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await handleSaveForLater();
+
+      expect(saved).toHaveLength(1);
+      expect('reading' in saved[0].page.structured_json).toBe(false);
+      expect(saved[0].page.structured_json.words).toEqual([{ term: '成長', detail: 'growth' }]);
+    });
+
+    test('a legacy lastResponse restore has no reading and still saves', async () => {
+      const cacheKey = buildContextCacheKey({ selectedText: '台風が接近する', promptVariant: 'v2' });
+      setupLocalStorage({
+        lastAnalysisKey: cacheKey,
+        lastResponse: '### 單字分析\n#### <單字>成長\ngrowth',
+      });
+      setupElements();
+      const saved = [];
+      global.JaAlchemyApiService = class { async saveAnalysis(a) { saved.push(a); return { success: true }; } };
+
+      await analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await handleSaveForLater();
+
+      expect(saved).toHaveLength(1);
+      expect('reading' in saved[0].page.structured_json).toBe(false);
+    });
+  });
+
+  test('G: the reading contract fence never leaks into any markdown / UI string path', async () => {
+    const { calls, saved } = deferredSaveApi();
+    const { prose } = setupElements();
+    const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+
+    const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(`${human}\n\n${readingFence(groundedContract)}`);
+    calls[0].resolve();
+    await request;
+    await handleSaveForLater();
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    const surfaces = [
+      global.localStorage.getItem('lastResponse'),
+      projection.response,
+      projection.html,
+      prose.innerHTML,
+      saved[0].page.rendered_markdown,
+    ];
+    for (const surface of surfaces) {
+      expect(surface).not.toContain('reading_contract_version');
+      expect(surface).not.toContain('```');
+    }
+    // the data still made it to the structured sibling
+    expect(projection.json.reading).toEqual(groundedReading);
   });
 });

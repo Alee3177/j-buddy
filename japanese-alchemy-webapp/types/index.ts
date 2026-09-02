@@ -24,9 +24,19 @@ export interface Grammar {
   metadata?: SharedItemMetadata;
 }
 
+export interface ReadingTokenContract {
+  version: 1;
+  source_text: string;
+  tokens: Array<{ text: string; reading: string | null }>;
+}
+
 export interface StructuredAnalysis {
   words?: Array<{ term: string; detail: string }>;
   grammars?: Array<{ point: string; explanation: string }>;
+  // Japanese Reader v0.3 Phase 1: authoritative reading tokens for the analysed
+  // source text (grounded to the browser selection at save time). Optional and
+  // absent on every pre-v0.3 page; not currently rendered by the webapp.
+  reading?: ReadingTokenContract;
 }
 
 export interface AnalysisPage {

@@ -219,6 +219,48 @@ function isStructuredAnalysisEntry(entry, fields) {
         && fields.every((field) => typeof entry[field] === 'string');
 }
 
+/**
+ * Validate and clone the authoritative reading tokens for persistence inside
+ * `structured_json.reading` (Japanese Reader v0.3 Phase 1 — learner memory /
+ * review / quiz baseline).
+ *
+ * Pure and total. Accepts ONLY the exact persisted shape:
+ *   { version: 1,
+ *     source_text: non-empty string,
+ *     tokens: non-empty array of
+ *       { text: non-empty string, reading: non-empty string | null } }
+ * and additionally requires `tokens.map(t => t.text).join('') === source_text`.
+ *
+ * Returns a fresh object with freshly-built token objects — never a reference to
+ * the parser / provider value — or `null` for any malformed input. Readings are
+ * never invented, trimmed, width-folded, or otherwise normalized.
+ *
+ * @param {unknown} reading
+ * @returns {{ version: 1, source_text: string, tokens: Array<{ text: string, reading: string|null }> }|null}
+ */
+function normalizePersistedReading(reading) {
+    if (!reading || typeof reading !== 'object' || Array.isArray(reading)) return null;
+    if (reading.version !== 1) return null;
+    if (typeof reading.source_text !== 'string' || reading.source_text.length === 0) return null;
+    if (!Array.isArray(reading.tokens) || reading.tokens.length === 0) return null;
+
+    const tokens = [];
+    for (const rawToken of reading.tokens) {
+        if (!rawToken || typeof rawToken !== 'object' || Array.isArray(rawToken)) return null;
+        const { text } = rawToken;
+        const tokenReading = rawToken.reading;
+        if (typeof text !== 'string' || text.length === 0) return null;
+        const readingOk = tokenReading === null
+            || (typeof tokenReading === 'string' && tokenReading.length > 0);
+        if (!readingOk) return null;
+        tokens.push({ text, reading: tokenReading === null ? null : tokenReading });
+    }
+
+    if (tokens.map((token) => token.text).join('') !== reading.source_text) return null;
+
+    return { version: 1, source_text: reading.source_text, tokens };
+}
+
 function normalizeStructuredAnalysisResult(json) {
     if (!json || typeof json !== 'object') return null;
 
@@ -227,6 +269,20 @@ function normalizeStructuredAnalysisResult(json) {
         words: json.words || [],
         grammars: json.grammars || [],
     };
+
+    // v0.3 Phase 1: an optional `reading` sub-object rides inside structured_json.
+    // Keep a structurally-valid one (re-cloned, never by reference); silently
+    // drop a malformed one. Absent `reading` (old cached projections, V1 /
+    // managed-provider responses, ungrounded contracts) is left untouched.
+    if ('reading' in normalizedJson) {
+        const normalizedReading = normalizePersistedReading(normalizedJson.reading);
+        if (normalizedReading) {
+            normalizedJson.reading = normalizedReading;
+        } else {
+            delete normalizedJson.reading;
+        }
+    }
+
     return Array.isArray(normalizedJson.words)
         && Array.isArray(normalizedJson.grammars)
         && normalizedJson.words.every((word) => isStructuredAnalysisEntry(word, ['term', 'detail']))
@@ -737,6 +793,30 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
                         }
                         const humanMarkdown = separated.markdown;
+                        // v0.3 Phase 1: persist the authoritative reading tokens
+                        // (for future learner memory / review / quiz features)
+                        // as `structured_json.reading`. GROUNDING GATE: only when
+                        // a structurally valid reading contract is present AND its
+                        // `source_text` is byte-for-byte the browser selection
+                        // captured when this request started
+                        // (`selectedTextForRequest`) — no trim / NFKC / width /
+                        // whitespace normalization. This is INDEPENDENT of whether
+                        // reconcileRuby rewrites the `### 原句` line: a source-line
+                        // mismatch / not-found / ambiguous does NOT invalidate
+                        // reading data grounded to the real selection.
+                        // RECONCILE_SELECTED_TEXT_MISMATCH necessarily fails this
+                        // same equality check, so an ungrounded contract is never
+                        // persisted. The contract JSON fence itself never reaches
+                        // any string path — only `separated.readingContract`
+                        // object fields are read here.
+                        const persistedReading = separated.readingContract
+                            && separated.readingContract.sourceText === selectedTextForRequest
+                            ? normalizePersistedReading({
+                                version: 1,
+                                source_text: separated.readingContract.sourceText,
+                                tokens: separated.readingContract.tokens,
+                            })
+                            : null;
                         // v0.2 Phase 2B-2: when a valid reading contract is
                         // present AND it is grounded in the actual selected text
                         // (`selectedTextForRequest`, captured when this request
@@ -797,7 +877,11 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         const enrichedText = enrichMarkdownWithConjugation(rubyRepair.text);
                         activeAnalysisPreviewText = '';
                         const formattedResult = formatAnalysisResult(enrichedText);
-                        const normalizedJson = normalizeStructuredAnalysisResult(formattedResult.json);
+                        const normalizedJson = normalizeStructuredAnalysisResult(
+                            persistedReading
+                                ? { ...formattedResult.json, reading: persistedReading }
+                                : formattedResult.json
+                        );
                         if (!normalizedJson) {
                             throw new Error('Unable to format the completed analysis result.');
                         }
