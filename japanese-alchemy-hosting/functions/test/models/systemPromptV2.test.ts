@@ -148,7 +148,7 @@ describe("SYSTEM_PROMPT_V2", () => {
 
     it("verb instruction still requires the engine-needed verb fields", () => {
       // 讀音 is conveyed via the worked examples; item 2 enumerates the rest.
-      expect(verbInstruction).toContain("重音");
+      // 重音 (pitch accent) was removed in Phase 2B-1 — see the pitch-accent tests below.
       expect(verbInstruction).toContain("動詞分類");
       expect(verbInstruction).toContain("解釋");
       expect(verbInstruction).toContain("辭書形");
@@ -174,6 +174,54 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toContain("### 文法分析");
       expect(SYSTEM_PROMPT_V2).toContain("相似文法比較");
       expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として（N3）");
+    });
+  });
+
+  describe("Phase 2B-1: managed prompt convergence", () => {
+    it("adds the collocation section, instructed and worked", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("### 搭配分析");
+      // Collocations must not be promoted into grammar analysis.
+      expect(SYSTEM_PROMPT_V2).toMatch(/搭配.{0,20}不得被拉入.{0,10}文法分析/);
+    });
+
+    it("adds the register/news-style section, instructed and worked", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("### 語體／新聞表現");
+    });
+
+    it("carves basic case particles out of grammar promotion", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("基本格助詞不得升格為文法點");
+      expect(SYSTEM_PROMPT_V2).toMatch(/に／を／が／で／へ/);
+    });
+
+    it("states the grounding principle across all analysis categories", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/落地（grounding）原則/);
+      expect(SYSTEM_PROMPT_V2).toMatch(/只能描述實際出現在【分析対象】中的形式/);
+    });
+
+    it("explains 連用中止 as continuative-form clause linkage, not て-omission", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("連用中止");
+      expect(SYSTEM_PROMPT_V2).toContain("不可簡化為「省略了て」");
+      expect(SYSTEM_PROMPT_V2).toMatch(/連用形.{0,10}接續後續子句/);
+    });
+
+    it("does not request pitch accent / 重音 output anywhere, and forbids it explicitly", () => {
+      // No worked-example data field asking for a pitch-accent number.
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/[-•]\s*重音[:：]/);
+      // The old instruction enumerating 讀音、重音、動詞分類 is gone.
+      expect(SYSTEM_PROMPT_V2).not.toContain("列出讀音、重音");
+      expect(SYSTEM_PROMPT_V2).not.toContain("片假名外來語另列重音");
+      // Replaced with an explicit prohibition (mirrors the personal-provider contract).
+      expect(SYSTEM_PROMPT_V2).toMatch(/不要輸出重音／音調（pitch accent）數字/);
+    });
+
+    it("keeps the 1-5 grammar range and JLPT grammar-heading labels unchanged (deferred to 2B-2)", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/1\s*[〜~-]\s*5/);
+      expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として（N3）");
+    });
+
+    it("does not add the reading contract", () => {
+      expect(SYSTEM_PROMPT_V2).not.toContain("reading_contract_version");
+      expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約");
     });
   });
 });
