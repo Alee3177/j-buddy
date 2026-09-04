@@ -94,7 +94,7 @@ describeMaybe(`Tier 2 prompt quality (provider=${PROVIDER}, versions=${VERSIONS.
         try {
           const llm = createLlmService();
           const res = await llm.chatCompletion(systemPrompt, fixture.input);
-          const response = (res.data as string) ?? "";
+          const response = (res.response.data as string) ?? "";
           const parsed = parseAnalysis(response);
 
           const outcomes = runChecks(response, fixture, version);
