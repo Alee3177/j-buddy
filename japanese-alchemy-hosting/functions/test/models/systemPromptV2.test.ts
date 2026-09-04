@@ -11,8 +11,8 @@ describe("SYSTEM_PROMPT_V2", () => {
     expect(SYSTEM_PROMPT_V2).not.toContain("只能列出二則分析");
   });
 
-  it("instructs a wider 1-5 grammar point range", () => {
-    expect(SYSTEM_PROMPT_V2).toMatch(/1\s*[〜~-]\s*5/);
+  it("instructs a 0-5 grammar point range", () => {
+    expect(SYSTEM_PROMPT_V2).toMatch(/0\s*[〜~-]\s*5/);
   });
 
   it("keeps the shared output section structure", () => {
@@ -23,10 +23,12 @@ describe("SYSTEM_PROMPT_V2", () => {
   });
 
   describe("usage-oriented vocabulary contract", () => {
-    it("limits V2 to at most four high-value vocabulary items", () => {
+    it("limits V2 to at most four high-value vocabulary items, selected by value not JLPT band", () => {
       expect(SYSTEM_PROMPT_V2).toMatch(/最多\s*4\s*個高價值詞/);
-      expect(SYSTEM_PROMPT_V2).toContain("JLPT N1,N2,N3");
-      expect(SYSTEM_PROMPT_V2).toContain("不列 N4/N5 基礎詞");
+      // Phase 2B-2: JLPT-band chasing/prioritization removed — see the
+      // vocabulary-selection tests in the Phase 2B-2 describe block below.
+      expect(SYSTEM_PROMPT_V2).not.toContain("JLPT N1,N2,N3");
+      expect(SYSTEM_PROMPT_V2).not.toContain("不列 N4/N5 基礎詞");
     });
 
     it("allows high-value non-verb vocabulary categories", () => {
@@ -173,7 +175,8 @@ describe("SYSTEM_PROMPT_V2", () => {
     it("grammar section remains intact (V2 structure)", () => {
       expect(SYSTEM_PROMPT_V2).toContain("### 文法分析");
       expect(SYSTEM_PROMPT_V2).toContain("相似文法比較");
-      expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として（N3）");
+      // Phase 2B-2: the worked heading no longer carries a JLPT label.
+      expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として");
     });
   });
 
@@ -214,14 +217,55 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toMatch(/不要輸出重音／音調（pitch accent）數字/);
     });
 
-    it("keeps the 1-5 grammar range and JLPT grammar-heading labels unchanged (deferred to 2B-2)", () => {
-      expect(SYSTEM_PROMPT_V2).toMatch(/1\s*[〜~-]\s*5/);
-      expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として（N3）");
-    });
-
     it("does not add the reading contract", () => {
       expect(SYSTEM_PROMPT_V2).not.toContain("reading_contract_version");
       expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約");
+    });
+  });
+
+  describe("Phase 2B-2: grammar quota + JLPT contract migration", () => {
+    it("instructs a 0〜5 grammar point range", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/0\s*[〜~-]\s*5/);
+    });
+
+    it("explicitly states that 0 grammar points is a valid answer", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("0 個也是有效的答案");
+      expect(SYSTEM_PROMPT_V2).toMatch(/如果原句沒有值得教的文法結構，就輸出\s*0\s*個文法點/);
+    });
+
+    it("explicitly forbids quota-filling with collocations/particles/phrases", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("不要為了湊數把搭配、基本助詞用法或詞組硬塞進文法分析");
+      expect(SYSTEM_PROMPT_V2).toContain("只納入實際出現在【分析対象】中、真正具有學習價值的文法");
+    });
+
+    it("no longer requires JLPT levels in grammar headings", () => {
+      expect(SYSTEM_PROMPT_V2).not.toContain("「文法點 + JLPT 等級」");
+      expect(SYSTEM_PROMPT_V2).toContain("「文法點」");
+      expect(SYSTEM_PROMPT_V2).toMatch(/標題不需要、也不應該標注\s*JLPT\s*等級/);
+    });
+
+    it("worked example grammar heading carries no （N3） label", () => {
+      expect(SYSTEM_PROMPT_V2).not.toContain("〜として（N3）");
+      expect(SYSTEM_PROMPT_V2).toContain("#### <文法>〜として");
+    });
+
+    it("vocabulary instruction no longer prioritizes N1/N2/N3", () => {
+      expect(SYSTEM_PROMPT_V2).not.toContain("JLPT N1,N2,N3 優先");
+      expect(SYSTEM_PROMPT_V2).not.toContain("N1,N2,N3 優先");
+      expect(SYSTEM_PROMPT_V2).not.toContain("不列 N4/N5 基礎詞");
+    });
+
+    it("replaces band-based exclusion with value-based vocabulary selection wording", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("不列對理解原句沒有幫助的基礎詞");
+      expect(SYSTEM_PROMPT_V2).toMatch(/用法非直觀、具有特定語域，或帶有值得學的搭配/);
+      // The 4-item cap itself is unchanged by this phase.
+      expect(SYSTEM_PROMPT_V2).toMatch(/最多\s*4\s*個高價值詞/);
+    });
+
+    it("still does not add the reading contract", () => {
+      expect(SYSTEM_PROMPT_V2).not.toContain("reading_contract_version");
+      expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約");
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/```json/);
     });
   });
 });
