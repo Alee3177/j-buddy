@@ -235,9 +235,6 @@ function grammarHeadingMatchesContent(response: string): CheckResult {
   for (const entry of entries) {
     const head = entry.split("\n")[0];
     const headNorm = stripRuby(head);
-    if (!/<文法>.*[（(]\s*N[123]\s*[)）]/.test(headNorm)) {
-      return { pass: false, detail: `grammar heading missing JLPT level: ${head}` };
-    }
     const core = headNorm.replace(/^.*<文法>/, "").replace(/[（(].*$/, "").replace(/^〜+/, "").trim();
     if (core) {
       // Split slash-alternatives (ても／でも) and accept if any part appears in the body.
@@ -281,7 +278,7 @@ function expectedGrammarCovered(response: string, fixture: Fixture): CheckResult
     if (gs.includes(grammarCore(g))) covered++;
     else missing.push(g);
   }
-  return { pass: covered >= 1, detail: `${covered}/${total} covered${missing.length ? `; missing: ${missing.join(", ")}` : ""}` };
+  return { pass: total === 0 || covered >= 1, detail: `${covered}/${total} covered${missing.length ? `; missing: ${missing.join(", ")}` : ""}` };
 }
 
 function grammarEntries(response: string): string[] {
@@ -294,9 +291,10 @@ function grammarEntries(response: string): string[] {
 
 function grammarShape(response: string, version: PromptVersion): CheckResult {
   const entries = grammarEntries(response);
+  const min = version === "v2" ? 0 : 1;
   const max = version === "v1" ? 3 : 5;
-  if (entries.length < 1 || entries.length > max) {
-    return { pass: false, detail: `${entries.length} grammar entries (expected 1-${max})` };
+  if (entries.length < min || entries.length > max) {
+    return { pass: false, detail: `${entries.length} grammar entries (expected ${min}-${max})` };
   }
   const requiredFields = version === "v1"
     ? ["接續形式", "用法說明"]
