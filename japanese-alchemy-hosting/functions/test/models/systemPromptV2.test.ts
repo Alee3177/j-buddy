@@ -217,10 +217,9 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toMatch(/不要輸出重音／音調（pitch accent）數字/);
     });
 
-    it("does not add the reading contract", () => {
-      expect(SYSTEM_PROMPT_V2).not.toContain("reading_contract_version");
-      expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約");
-    });
+    // "does not add the reading contract" was removed in Phase 2C-1: the
+    // reading contract is now added (see the Phase 2C-1 describe block below).
+    // Keeping a negative assertion here would directly contradict it.
   });
 
   describe("Phase 2B-2: grammar quota + JLPT contract migration", () => {
@@ -262,10 +261,123 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toMatch(/最多\s*4\s*個高價值詞/);
     });
 
-    it("still does not add the reading contract", () => {
-      expect(SYSTEM_PROMPT_V2).not.toContain("reading_contract_version");
-      expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約");
-      expect(SYSTEM_PROMPT_V2).not.toMatch(/```json/);
+    // "still does not add the reading contract" was removed in Phase 2C-1:
+    // the reading contract is now added (see the Phase 2C-1 describe block
+    // below). Keeping a negative assertion here would directly contradict it.
+  });
+
+  describe("Phase 2C-1: managed reading contract", () => {
+    it("A: requires a final machine-readable reading-contract JSON block", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("讀音契約");
+      expect(SYSTEM_PROMPT_V2).toContain("reading_contract_version");
+      expect(SYSTEM_PROMPT_V2).toContain('"reading_contract_version": 1');
+    });
+
+    it("B: requires source_text to reproduce 【分析対象】 exactly, with no normalization", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("source_text 必須逐字重現【分析対象】");
+      expect(SYSTEM_PROMPT_V2).toContain("不得修剪、正規化、轉換全形／半形、改寫或重複");
+    });
+
+    it("C: requires token.text concatenation to equal source_text exactly", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("把每個 token.text 依序連接起來，必須完全等於 source_text");
+      expect(SYSTEM_PROMPT_V2).toContain("不可插入 source_text 沒有的文字");
+      expect(SYSTEM_PROMPT_V2).toContain("不可重複表面文字");
+    });
+
+    it("D: requires kana-or-null readings and forbids an empty-string reading", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("給假名字串");
+      expect(SYSTEM_PROMPT_V2).toContain("不需標音者，給 null");
+      expect(SYSTEM_PROMPT_V2).toContain("空字串不是有效的 reading");
+    });
+
+    it("E: requires contextual calendar-date readings including 1日→ついたち and 3日→みっか", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("讀音必須符合語境");
+      expect(SYSTEM_PROMPT_V2).toContain("1日→ついたち");
+      expect(SYSTEM_PROMPT_V2).toContain("3日→みっか");
+      expect(SYSTEM_PROMPT_V2).toContain("24日→にじゅうよっか");
+      // The worked example ties the rule to a concrete token: 日 reads みっか
+      // here, not the generic にち.
+      expect(SYSTEM_PROMPT_V2).toContain('{"text":"日","reading":"みっか"}');
+    });
+
+    it("F: excludes romanization, pitch accent, JLPT level and translation/semantic notes from the contract", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("不得放羅馬拼音、重音（pitch accent）、JLPT 等級、翻譯或語意說明");
+    });
+
+    it("G: mandates the fence be the final non-whitespace content, with no trailing prose", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("必須是整個回應的最後非空白內容");
+      expect(SYSTEM_PROMPT_V2).toContain("其後不得再有任何文字、標題或區塊");
+      expect(SYSTEM_PROMPT_V2).toContain("語言標籤為 json 的 fenced code block");
+      expect(SYSTEM_PROMPT_V2).toContain("讀音契約之後不得再有任何內容");
+    });
+
+    it("H: orders managed sections 原句→單字分析→文法分析→搭配分析→語體／新聞表現→讀音契約, with no 漢字提取", () => {
+      const order = ["### 原句", "### 單字分析", "### 文法分析", "### 搭配分析", "### 語體／新聞表現"];
+      let cursor = -1;
+      for (const heading of order) {
+        const at = SYSTEM_PROMPT_V2.indexOf(heading, cursor + 1);
+        expect(at).toBeGreaterThan(cursor);
+        cursor = at;
+      }
+      const fenceAt = SYSTEM_PROMPT_V2.indexOf("```json", cursor + 1);
+      expect(fenceAt).toBeGreaterThan(cursor);
+      expect(SYSTEM_PROMPT_V2).not.toContain("### 漢字提取");
+    });
+
+    it("keeps inline {漢字|かな} ruby and does not remove it", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("本階段人類可讀 Markdown 仍須照常使用 {漢字|かな}");
+      expect(SYSTEM_PROMPT_V2).toContain("不要移除既有的行內 ruby");
+    });
+
+    // I: worked-example self-consistency.
+    //
+    // This suite deliberately does NOT import parseReadingContract from
+    // japanese-alchemy-chrome-extension/src/scripts/rubyContract.js. The
+    // hosting Cloud Functions project and the Chrome extension are separate,
+    // independently built/deployed packages with no shared workspace linkage
+    // or existing cross-project import precedent (no other hosting test
+    // imports extension source, and vice versa) — reaching across that
+    // boundary for one test would create a fragile, unversioned coupling
+    // between two repos with different release cycles. Instead this test
+    // re-derives the same narrow schema check inline (fence extraction +
+    // JSON.parse + concatenation equality) rather than duplicating the full
+    // parser (its issue codes, fence-discovery heuristics, etc. are Phase 2A
+    // extension-runtime concerns, out of scope here).
+    it("I: the worked example's trailing fence is itself a self-consistent reading contract", () => {
+      const trimmed = SYSTEM_PROMPT_V2.replace(/\s+$/, "");
+      expect(trimmed.endsWith("```")).toBe(true);
+      const closeIdx = trimmed.lastIndexOf("```");
+      const fenceStart = "```json\n";
+      const openIdx = trimmed.slice(0, closeIdx).lastIndexOf(fenceStart);
+      expect(openIdx).toBeGreaterThan(-1);
+
+      const jsonText = trimmed.slice(openIdx + fenceStart.length, closeIdx);
+      const parsed = JSON.parse(jsonText);
+
+      expect(parsed.reading_contract_version).toBe(1);
+      expect(typeof parsed.source_text).toBe("string");
+      expect(Array.isArray(parsed.tokens)).toBe(true);
+      expect(parsed.tokens.length).toBeGreaterThan(0);
+      expect(parsed.tokens.every((t: any) => typeof t.text === "string" && t.text.length > 0)).toBe(true);
+      expect(
+        parsed.tokens.every((t: any) => t.reading === null || (typeof t.reading === "string" && t.reading.length > 0))
+      ).toBe(true);
+      expect(parsed.tokens.map((t: any) => t.text).join("")).toBe(parsed.source_text);
+      // the example sentence is the same one the human-readable ### 原句 block uses
+      expect(parsed.source_text).toContain("同技術は特に労働力不足");
+      expect(parsed.source_text.endsWith("後押しするという。")).toBe(true);
+    });
+
+    it("preserves Phase 2B grammar/vocabulary/collocation/register behavior unchanged", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/0\s*[〜~-]\s*5/);
+      expect(SYSTEM_PROMPT_V2).toContain("0 個也是有效的答案");
+      expect(SYSTEM_PROMPT_V2).not.toContain("「文法點 + JLPT 等級」");
+      expect(SYSTEM_PROMPT_V2).not.toContain("JLPT N1,N2,N3 優先");
+      expect(SYSTEM_PROMPT_V2).toContain("基本格助詞不得升格為文法點");
+      expect(SYSTEM_PROMPT_V2).toContain("### 搭配分析");
+      expect(SYSTEM_PROMPT_V2).toContain("### 語體／新聞表現");
+      expect(SYSTEM_PROMPT_V2).toContain("不可簡化為「省略了て」");
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/[-•]\s*重音[:：]/);
     });
   });
 });
