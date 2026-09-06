@@ -18,6 +18,7 @@ import {
   stripRubyMarkup,
   READING_CONTRACT_ISSUE_CODES as RC,
   RUBY_RECONCILE_ISSUE_CODES as RCN,
+  READING_CONTRACT_MARKER,
 } from '../src/scripts/rubyContract.js';
 
 const codes = (result) => result.issues.map((i) => i.code);
@@ -990,5 +991,214 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
     // break link 1 only → refuse
     expect(reconcileRuby(md, c, '別のテキスト').issues.map((i) => i.code))
       .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
+  });
+});
+
+// --- P0-C1: marker-based, position-independent reading contract -----------
+//
+// The contract now moves to the FRONT of the managed response, wrapped in
+// READING_CONTRACT_MARKER.START/.END, so it survives output truncation on
+// long/dense input (it is fully emitted before any expensive prose
+// generation starts). These tests cover the new marked-format extraction
+// path; the legacy final-fence tests above (describe blocks for
+// parseReadingContract / separateReadingContract) are re-run unchanged and
+// continue to pin the old behavior byte-for-byte — that is the backward-
+// compatibility guarantee, not a new assertion.
+
+describe('rubyContract — P0-C1 marker-based reading contract', () => {
+  const markedFence = (obj) => [
+    READING_CONTRACT_MARKER.START,
+    '```json',
+    JSON.stringify(obj, null, 2),
+    '```',
+    READING_CONTRACT_MARKER.END,
+  ].join('\n');
+
+  test('A: a marked contract FIRST, followed by prose, parses correctly', () => {
+    const contract = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const prose = '### 原句\n  - {台風|たいふう}{接近|せっきん}\n\n### 文法分析\n（無）';
+    const full = `${markedFence(contract)}\n\n${prose}`;
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    expect(r.contract.sourceText).toBe('台風接近');
+    expect(r.contract.tokens).toEqual([
+      { text: '台風', reading: 'たいふう' },
+      { text: '接近', reading: 'せっきん' },
+    ]);
+  });
+
+  test('B: separateReadingContract strips ONLY the marked block; prose before AND after survives', () => {
+    const contract = contractOf('台風', [tok('台風', 'たいふう')]);
+    const before = '### 前言\nsome earlier unrelated note';
+    const after = '### 原句\n  - {台風|たいふう}\n\n### 文法分析\n（無）';
+    const full = `${before}\n\n${markedFence(contract)}\n\n${after}`;
+
+    const r = separateReadingContract(full);
+    expect(r.markdown).toBe(`${before}\n\n${after}`);
+    expect(r.hadContract).toBe(true);
+    expect(r.contractIssues).toEqual([]);
+    expect(r.readingContract).toEqual({ version: 1, sourceText: '台風', tokens: [{ text: '台風', reading: 'たいふう' }] });
+    expect(r.markdown).not.toContain('READING_CONTRACT');
+    expect(r.markdown).not.toContain('reading_contract_version');
+    expect(r.markdown).not.toContain('```');
+  });
+
+  test('C: with no marker present at all, the legacy final-fence rule still applies unchanged', () => {
+    const contract = contractOf('雨', [tok('雨', 'あめ')]);
+    const full = asFinalJsonBlock(contract);
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe('雨');
+
+    const sep = separateReadingContract(full);
+    expect(sep.hadContract).toBe(true);
+    expect(sep.readingContract.sourceText).toBe('雨');
+  });
+
+  test('D: a marked contract is found even when unrelated ```json prose appears elsewhere; that prose is untouched', () => {
+    const contract = contractOf('台風', [tok('台風', 'たいふう')]);
+    const unrelated = '```json\n{"example": true}\n```';
+    const prose = `### 原句\n  - {台風|たいふう}\n\n${unrelated}\n\n### 文法分析\n（無）`;
+    const full = `${markedFence(contract)}\n\n${prose}`;
+
+    const r = separateReadingContract(full);
+    expect(r.markdown).toBe(prose);
+    expect(r.markdown).toContain('{"example": true}');
+    expect(r.readingContract.sourceText).toBe('台風');
+  });
+
+  test('E1: marker present but no fence follows it → READING_CONTRACT_TRUNCATED (not NOT_FOUND)', () => {
+    const full = `${READING_CONTRACT_MARKER.START}\n\nnot a fence at all\n\n### 原句\nprose`;
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_TRUNCATED]);
+  });
+
+  test('E2: marker + fence open but never closed (cut off mid-array) → READING_CONTRACT_TRUNCATED', () => {
+    const full = [
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      '{ "reading_contract_version": 1, "source_text": "台風", "tokens": [',
+      '  { "text": "台風", "reading": "たい',
+    ].join('\n');
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_TRUNCATED]);
+  });
+
+  test('F1: truncated marked-contract debris (no fence ever opened) is stripped, never leaked', () => {
+    const humanBefore = '### 前情提要\nsome earlier unrelated prose';
+    const full = `${humanBefore}\n\n${READING_CONTRACT_MARKER.START}\n\nincomplete`;
+
+    const r = separateReadingContract(full);
+    expect(r.markdown).toBe(humanBefore);
+    expect(r.markdown).not.toContain('READING_CONTRACT');
+    expect(r.hadContract).toBe(true);
+    expect(r.readingContract).toBeNull();
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_TRUNCATED]);
+  });
+
+  test('F2: truncated marked contract (fence opened, never closed) — debris after prose is stripped, prose before it survives', () => {
+    const humanBefore = '### 前情提要\nsome earlier unrelated prose';
+    const full = [
+      humanBefore,
+      '',
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      '{ "reading_contract_version": 1, "source_text": "台風", "tokens": [',
+      '  { "text": "台風", "reading": "たい',
+    ].join('\n');
+
+    const r = separateReadingContract(full);
+    expect(r.markdown).toBe(humanBefore);
+    expect(r.markdown).not.toContain('READING_CONTRACT');
+    expect(r.markdown).not.toContain('reading_contract_version');
+    expect(r.markdown).not.toContain('```');
+    expect(r.hadContract).toBe(true);
+    expect(r.readingContract).toBeNull();
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_TRUNCATED]);
+  });
+
+  test('F3: with NO prose before it at all, a truncated marked contract strips to an empty humanMarkdown', () => {
+    const full = `${READING_CONTRACT_MARKER.START}\n\`\`\`json\n{ "reading_contract_version": 1, "source_text": "台風", "tokens": [\n  { "text": "台風", "reading": "たい`;
+    const r = separateReadingContract(full);
+    expect(r.markdown).toBe('');
+    expect(r.hadContract).toBe(true);
+    expect(r.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_TRUNCATED]);
+  });
+
+  test('G: marked contract whose token concatenation ≠ source_text fails closed (SOURCE_MISMATCH), and its debris is still stripped', () => {
+    const contract = contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以後', 'いご')]);
+    const prose = '### 原句\nprose';
+    const full = `${markedFence(contract)}\n\n${prose}`;
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_SOURCE_MISMATCH]);
+
+    // Unlike the legacy conservative path, a MARKED-but-invalid block is still
+    // proof-of-intent metadata, so it is stripped rather than left in place.
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.readingContract).toBeNull();
+    expect(sep.hadContract).toBe(true);
+    expect(sep.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_SOURCE_MISMATCH]);
+  });
+
+  test('H: marked contract with an unsupported version fails closed, and its debris is still stripped', () => {
+    const contract = contractOf('台風', [tok('台風', 'たいふう')], 2);
+    const prose = '### 原句\nprose';
+    const full = `${markedFence(contract)}\n\n${prose}`;
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.readingContract).toBeNull();
+    expect(sep.contractIssues.map((i) => i.code)).toEqual([RC.READING_CONTRACT_UNSUPPORTED_VERSION]);
+  });
+
+  test('I: end marker is optional — a closed fence with no end marker still parses and strips correctly', () => {
+    const contract = contractOf('台風', [tok('台風', 'たいふう')]);
+    const prose = '### 原句\n  - {台風|たいふう}';
+    // no READING_CONTRACT_MARKER.END at all
+    const full = [READING_CONTRACT_MARKER.START, '```json', JSON.stringify(contract), '```', '', prose].join('\n');
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe('台風');
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.hadContract).toBe(true);
+  });
+
+  test('J: idempotent — separating an already-separated marked response is a no-op with no contract', () => {
+    const contract = contractOf('台風', [tok('台風', 'たいふう')]);
+    const prose = '### 原句\n  - {台風|たいふう}';
+    const full = `${markedFence(contract)}\n\n${prose}`;
+    const once = separateReadingContract(full);
+    const twice = separateReadingContract(once.markdown);
+    expect(twice.markdown).toBe(once.markdown);
+    expect(twice.hadContract).toBe(false);
+    expect(twice.readingContract).toBeNull();
+  });
+
+  test('a marked contract is unaffected by an EARLIER unrelated final-fence-shaped block before it', () => {
+    // Guards against the marked path accidentally degrading into "search for
+    // any fence" behaviour: only the fence immediately after the marker
+    // counts, regardless of what other fences exist in the document.
+    const contract = contractOf('台風', [tok('台風', 'たいふう')]);
+    const decoy = '```json\n{"reading_contract_version":1,"source_text":"NOT THIS","tokens":[]}\n```';
+    const full = `${decoy}\n\n${markedFence(contract)}\n\n### 原句\nprose`;
+
+    const r = parseReadingContract(full);
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe('台風');
   });
 });

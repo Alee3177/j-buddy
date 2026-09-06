@@ -1211,6 +1211,90 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
       warnSpy.mockRestore();
     }
   });
+
+  test('F (P0-C1): a MARKED contract emitted FIRST is stripped, reconciled, and never leaks — full pipeline', async () => {
+    const apiCalls = setupDeferredApi();
+    const { prose } = setupElements();
+    const groundedContract = {
+      reading_contract_version: 1,
+      source_text: '台風が接近する',
+      tokens: [
+        { text: '台風', reading: 'たいふう' },
+        { text: 'が', reading: null },
+        { text: '接近', reading: 'せっきん' },
+        { text: 'する', reading: null },
+      ],
+    };
+    // Contract FIRST, wrapped in the P0-C1 markers, prose AFTER — the new
+    // production shape, in place of the legacy "contract as final block".
+    const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+    const fullText = [
+      '<!-- READING_CONTRACT_START -->',
+      readingFence(groundedContract),
+      '<!-- READING_CONTRACT_END -->',
+      '',
+      human,
+    ].join('\n');
+
+    const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    apiCalls[0].onDone(fullText);
+    apiCalls[0].resolve();
+    await request;
+
+    expect(prose.innerHTML).not.toContain('reading_contract_version');
+    expect(prose.innerHTML).not.toContain('READING_CONTRACT');
+    const response = global.localStorage.getItem('lastResponse');
+    expect(response).toBe(human);
+    expect(response).not.toContain('reading_contract_version');
+    expect(response).not.toContain('READING_CONTRACT');
+    expect(response).not.toContain('```');
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.response).toBe(human);
+    expect(projection.html).not.toContain('reading_contract_version');
+  });
+
+  test('G (P0-C1): saved page.rendered_markdown carries no marked-contract block either', async () => {
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    var calls = [];
+    setupElements();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+    const human = '### 原句\n  - {沖縄|おきなわ}に{最接近|さいせっきん}\n\n### 單字分析\n#### <單字>{最接近|さいせっきん}する\n  - 解釋：x';
+    const fullText = [
+      '<!-- READING_CONTRACT_START -->',
+      readingFence({
+        reading_contract_version: 1,
+        source_text: '沖縄に最接近',
+        tokens: [
+          { text: '沖縄', reading: 'おきなわ' },
+          { text: 'に', reading: null },
+          { text: '最接近', reading: 'さいせっきん' },
+        ],
+      }),
+      '<!-- READING_CONTRACT_END -->',
+      '',
+      human,
+    ].join('\n');
+
+    const request = analizingSelectedText('沖縄に最接近', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(fullText);
+    calls[0].resolve();
+    await request;
+    await handleSaveForLater();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.rendered_markdown).toBe(human);
+    expect(saved[0].page.rendered_markdown).not.toContain('reading_contract_version');
+    expect(saved[0].page.rendered_markdown).not.toContain('READING_CONTRACT');
+    expect(saved[0].page.rendered_markdown).not.toContain('```');
+  });
 });
 
 describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative ruby reconciliation', () => {

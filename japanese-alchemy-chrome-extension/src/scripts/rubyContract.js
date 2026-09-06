@@ -360,13 +360,48 @@ export function repairRuby(text) {
   };
 }
 
-// --- reading contract (v0.2 Phase 2A) -----------------------------------------
+// --- reading contract (v0.2 Phase 2A; P0-C1 marker-based relocation) ---------
 //
-// SYSTEM_PROMPT_V2 appends, as the FINAL fenced ```json block of the model
-// response, an authoritative reading-segmentation contract for the original
-// analysis target. Phase 2A only *parses and structurally validates* that block
-// — it is NOT wired into the runtime, NOT reconciled against the inline
-// `{漢字|かな}` ruby, and NOT persisted. Making it authoritative is Phase 2B.
+// v0.3 P0-C1: SYSTEM_PROMPT_V2 now emits the reading contract FIRST — before any
+// prose — wrapped in two literal sentinel lines so it can be found and removed
+// regardless of where it lands, instead of relying on "the final fenced block":
+//
+//   <!-- READING_CONTRACT_START -->
+//   ```json
+//   { ...contract... }
+//   ```
+//   <!-- READING_CONTRACT_END -->
+//
+// Rationale: the managed completion budget (max_tokens) is shared between the
+// contract and all prose sections. When the contract was emitted LAST, output
+// truncation on long/dense input silently lost it. Emitting it FIRST, behind an
+// unambiguous marker, means it is fully written (and extractable) before any
+// prose generation even starts — truncation later in the response can no longer
+// take the contract down with it.
+//
+// Extraction order (both `parseReadingContract` and `separateReadingContract`):
+//   1. Marked format: if `<!-- READING_CONTRACT_START -->` appears anywhere in
+//      the text, that occurrence — and ONLY that occurrence — is treated as the
+//      contract. This makes an unrelated ```json block elsewhere in the prose
+//      (teaching content, an earlier draft, anything) impossible to confuse
+//      with the contract: nothing without the literal marker is ever considered.
+//   2. Legacy fallback: if no marker is present at all, fall back to the v0.3
+//      Phase 2A/2B rule unchanged — the contract is the final fenced ```json
+//      block. This keeps every already-saved response and every existing test
+//      built on that shape parsing exactly as before.
+//
+// A marker that begins but never resolves to a complete, closed fence (model
+// output cut off mid-contract) is reported as READING_CONTRACT_TRUNCATED —
+// never silently treated as "no contract" — and everything from the start
+// marker onward is stripped from `humanMarkdown` (it cannot be valid prose: by
+// markdown fence semantics, an unclosed ``` swallows everything after it
+// anyway), so no partial JSON metadata can leak into rendered/copied/saved
+// output.
+
+export const READING_CONTRACT_MARKER = Object.freeze({
+  START: '<!-- READING_CONTRACT_START -->',
+  END: '<!-- READING_CONTRACT_END -->',
+});
 
 export const READING_CONTRACT_ISSUE_CODES = Object.freeze({
   READING_CONTRACT_NOT_FOUND: 'READING_CONTRACT_NOT_FOUND',
@@ -376,6 +411,10 @@ export const READING_CONTRACT_ISSUE_CODES = Object.freeze({
   READING_CONTRACT_EMPTY_TOKEN: 'READING_CONTRACT_EMPTY_TOKEN',
   READING_CONTRACT_INVALID_READING: 'READING_CONTRACT_INVALID_READING',
   READING_CONTRACT_SOURCE_MISMATCH: 'READING_CONTRACT_SOURCE_MISMATCH',
+  // P0-C1: a marked contract attempt was detected (the start marker is
+  // present) but never resolved into a complete, closed json fence — distinct
+  // from READING_CONTRACT_NOT_FOUND, which means no attempt was ever made.
+  READING_CONTRACT_TRUNCATED: 'READING_CONTRACT_TRUNCATED',
 });
 
 const RC = READING_CONTRACT_ISSUE_CODES;
@@ -442,70 +481,47 @@ function locateFinalJsonFence(src) {
 }
 
 /**
- * Locate and STRUCTURALLY validate the authoritative reading-contract JSON block
- * that SYSTEM_PROMPT_V2 appends as the final fenced ```json block of a response.
- *
- * Pure and total: no DOM / storage / network / side effects; never throws on any
- * model output.
- *
- * Extraction safety:
- *   - Only the block that is the final non-whitespace content is considered.
- *   - It must be a block-level fence tagged `json`.
- *   - Earlier fenced blocks are ignored.
- *   - The parsed value must be an object carrying `reading_contract_version`;
- *     arbitrary final JSON (e.g. `{"foo":"bar"}`) is rejected as NOT_FOUND.
+ * STRUCTURALLY validate one candidate contract JSON text (the raw text between
+ * a fence's opening and closing ```), regardless of where that fence was found.
+ * Shared by the marked-format and legacy-format extraction paths so both apply
+ * byte-for-byte identical validation rules.
  *
  * Structural validation only (Phase 2A): a contextually wrong reading such as
  * `{ "text": "日", "reading": "にち" }` for `3日` still returns `ok: true`. No
- * NFKC / whitespace / width normalization is performed anywhere. Semantic
- * reconciliation (and any にち→みっか correction) is deferred to Phase 2B and is
- * unrelated to the `SUSPECT_COUNTER_READING` heuristic in `validateRuby`.
+ * NFKC / whitespace / width normalization is performed anywhere.
  *
- * @param {string} markdown  the full model response text
+ * @param {string} jsonText
  * @returns {{ ok: boolean, contract: ReadingContract|null, issues: ReadingContractIssue[] }}
  */
-export function parseReadingContract(markdown) {
-  const src = typeof markdown === 'string' ? markdown : '';
+function validateContractJsonText(jsonText) {
   const fail = (code, message, index) => ({
     ok: false,
     contract: null,
     issues: [index === undefined ? { code, message } : { code, message, index }],
   });
 
-  // 1. The contract must be the final non-whitespace content and close with ```.
-  const fence = locateFinalJsonFence(src);
-  if (!fence) {
-    return fail(RC.READING_CONTRACT_NOT_FOUND,
-      'No block-level json code fence is the final content of the response.');
-  }
-  const { jsonText } = fence;
-
-  // 2. Parse JSON. Never repair.
   let parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch (_err) {
-    return fail(RC.READING_CONTRACT_INVALID_JSON, 'The final json block is not valid JSON.');
+    return fail(RC.READING_CONTRACT_INVALID_JSON, 'The json block is not valid JSON.');
   }
 
-  // 3. Must be a plain object carrying the discriminator key.
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return fail(RC.READING_CONTRACT_NOT_FOUND,
-      'The final json block is not a reading-contract object.');
+      'The json block is not a reading-contract object.');
   }
   if (!Object.prototype.hasOwnProperty.call(parsed, 'reading_contract_version')) {
     return fail(RC.READING_CONTRACT_NOT_FOUND,
-      'The final json block has no reading_contract_version; treated as unrelated JSON.');
+      'The json block has no reading_contract_version; treated as unrelated JSON.');
   }
 
-  // 4. Version must be integer 1.
   const version = parsed.reading_contract_version;
   if (!Number.isInteger(version) || version !== READING_CONTRACT_VERSION) {
     return fail(RC.READING_CONTRACT_UNSUPPORTED_VERSION,
       `Unsupported reading_contract_version: ${JSON.stringify(version)} (expected integer 1).`);
   }
 
-  // 5. Structural shape.
   if (typeof parsed.source_text !== 'string') {
     return fail(RC.READING_CONTRACT_INVALID_SHAPE, 'source_text must be a string.');
   }
@@ -533,7 +549,7 @@ export function parseReadingContract(markdown) {
     tokens.push({ text, reading: reading === null ? null : reading });
   }
 
-  // 6. Concatenation must reproduce source_text byte-for-byte (no normalization).
+  // Concatenation must reproduce source_text byte-for-byte (no normalization).
   const concatenated = tokens.map((t) => t.text).join('');
   if (concatenated !== sourceText) {
     return fail(RC.READING_CONTRACT_SOURCE_MISMATCH,
@@ -548,47 +564,28 @@ export function parseReadingContract(markdown) {
   };
 }
 
-/**
- * Split a completed model response into its human-readable Markdown and the
- * authoritative reading-contract JSON block, for the v0.2 Phase 2B-1 finalize
- * path.
- *
- * The reading contract is METADATA: it must never reach `repairRuby`,
- * `enrichMarkdownWithConjugation`, `formatAnalysisResult`, the rendered panel,
- * Copy / Save-As, or `page.rendered_markdown`. This helper removes it — and
- * ONLY it — when it can be proven valid; otherwise the response is returned
- * untouched (never delete model/user-visible content we cannot prove is a
- * reading contract).
- *
- * Phase 2B-1 does NOT reconcile inline `{漢字|かな}` ruby against the tokens.
- *
- * Stripping rule (deterministic): everything strictly before the opening ``` of
- * the final json fence is kept verbatim, then trailing ASCII spaces, tabs, CR
- * and LF (the Markdown block separator) are removed from that slice. Other
- * whitespace (e.g. U+3000) is preserved.
- *
- * Pure and total: no DOM / storage / network / side effects; never throws.
- *
- * @param {string} markdown  the full completed model response
- * @returns {{
- *   markdown: string,
- *   readingContract: ReadingContract|null,
- *   contractIssues: ReadingContractIssue[],
- *   hadContract: boolean,
- * }}
- *   `hadContract` is true when a final json fence clearly intended to be a
- *   reading contract (its raw text references `reading_contract_version`),
- *   whether or not it validated. `contractIssues` is non-empty only in that
- *   "intended but invalid" case — plain absence and unrelated final JSON report
- *   nothing to warn about.
- */
-export function separateReadingContract(markdown) {
-  const src = typeof markdown === 'string' ? markdown : '';
-  const parsed = parseReadingContract(src);
+/** Legacy (pre-P0-C1) extraction: the contract is the final fenced ```json block. */
+function parseLegacyFinalFenceContract(src) {
+  const fence = locateFinalJsonFence(src);
+  if (!fence) {
+    return {
+      ok: false,
+      contract: null,
+      issues: [{
+        code: RC.READING_CONTRACT_NOT_FOUND,
+        message: 'No block-level json code fence is the final content of the response.',
+      }],
+    };
+  }
+  return validateContractJsonText(fence.jsonText);
+}
+
+/** Legacy (pre-P0-C1) split: strip the final fence only when it validates. */
+function separateLegacyFinalFenceContract(src) {
+  const parsed = parseLegacyFinalFenceContract(src);
 
   if (parsed.ok) {
     const fence = locateFinalJsonFence(src);
-    // parseReadingContract only returns ok when a fence was found; guard anyway.
     if (!fence) {
       return { markdown: src, readingContract: null, contractIssues: [], hadContract: false };
     }
@@ -616,6 +613,229 @@ export function separateReadingContract(markdown) {
     contractIssues: parsed.issues,
     hadContract: true,
   };
+}
+
+/**
+ * Match a block-level ```json fence OPEN whose ``` starts at exactly index `i`
+ * (callers guarantee `i` is a line start). Returns `{ bodyStart }` — the index
+ * just past the opening line's own newline — or `null` when `src` at `i` is not
+ * such a fence.
+ */
+function matchJsonFenceOpenAt(src, i) {
+  if (src.slice(i, i + 3) !== '```') return null;
+  const lineEnd = src.indexOf('\n', i);
+  if (lineEnd === -1) return null;
+  const infoString = src.slice(i + 3, lineEnd).trim();
+  if (infoString.toLowerCase() !== 'json') return null;
+  return { bodyStart: lineEnd + 1 };
+}
+
+/**
+ * Scan forward line-by-line from `from` (a line-start index) for the next
+ * block-level closing fence line (up to 3 leading spaces, exactly ```, only
+ * trailing whitespace after). Returns `{ openIdx, closeEnd }` (the index of
+ * that line's ``` and the index just past it) or `null` if none is found
+ * before the end of `src` (i.e. the fence never closes).
+ */
+function findNextClosingFenceLine(src, from) {
+  let pos = from;
+  while (pos <= src.length) {
+    const lineEnd = src.indexOf('\n', pos);
+    const line = lineEnd === -1 ? src.slice(pos) : src.slice(pos, lineEnd);
+    if (/^ {0,3}```[ \t]*$/.test(line)) {
+      const openIdx = pos + line.indexOf('```');
+      return { openIdx, closeEnd: openIdx + 3 };
+    }
+    if (lineEnd === -1) return null;
+    pos = lineEnd + 1;
+  }
+  return null;
+}
+
+/**
+ * Locate the P0-C1 explicitly-marked reading contract anywhere in `src`.
+ *
+ * Returns `null` when `READING_CONTRACT_MARKER.START` does not appear at all
+ * (the caller should fall back to the legacy final-fence rule). Otherwise
+ * returns `{ attempted: true, state, startIdx, ... }`:
+ *   - state 'NO_FENCE_STARTED': the start marker is present, but the first
+ *     non-whitespace content after it is not a ```json fence open.
+ *   - state 'FENCE_NOT_CLOSED': a fence opened right after the marker, but no
+ *     closing ``` line was ever found before the end of `src` (truncation).
+ *   - state 'COMPLETE': `jsonText`, plus `endMarkerFound` / `endMarkerEnd` —
+ *     the end marker is read if present but is NOT required for validity (the
+ *     closing fence alone unambiguously ends the block); it only widens the
+ *     range removed from `humanMarkdown` when present.
+ *
+ * Deliberately narrow: the fence must follow the start marker with nothing but
+ * whitespace in between, so a marker can never reach across unrelated prose to
+ * grab some later, unrelated ```json block (teaching content, an example,
+ * etc.) as if it were the contract.
+ */
+function locateMarkedContractBlock(src) {
+  const START = READING_CONTRACT_MARKER.START;
+  const END = READING_CONTRACT_MARKER.END;
+  const startIdx = src.indexOf(START);
+  if (startIdx === -1) return null;
+
+  let i = startIdx + START.length;
+  while (i < src.length && /\s/.test(src[i])) i += 1;
+
+  const open = matchJsonFenceOpenAt(src, i);
+  if (!open) {
+    return { attempted: true, state: 'NO_FENCE_STARTED', startIdx };
+  }
+
+  const closed = findNextClosingFenceLine(src, open.bodyStart);
+  if (!closed) {
+    return { attempted: true, state: 'FENCE_NOT_CLOSED', startIdx };
+  }
+
+  const jsonText = src.slice(open.bodyStart, closed.openIdx);
+
+  let k = closed.closeEnd;
+  while (k < src.length && /\s/.test(src[k])) k += 1;
+  const endMarkerFound = src.slice(k, k + END.length) === END;
+  const endMarkerEnd = endMarkerFound ? k + END.length : closed.closeEnd;
+
+  return {
+    attempted: true,
+    state: 'COMPLETE',
+    startIdx,
+    jsonText,
+    endMarkerFound,
+    endMarkerEnd,
+  };
+}
+
+function truncatedContractMessage(state) {
+  return state === 'NO_FENCE_STARTED'
+    ? 'A Reading Contract start marker was found but no json fence followed it.'
+    : 'A Reading Contract start marker and fence were found but the fence never closed (truncated).';
+}
+
+/** Keep `before`'s content and `after`'s content, joined by exactly one blank line when both are non-empty. */
+function joinAroundRemovedBlock(before, after) {
+  const b = before.replace(/[ \t\r\n]+$/, '');
+  const a = after.replace(/^[ \t\r\n]+/, '');
+  if (b && a) return `${b}\n\n${a}`;
+  return b || a;
+}
+
+/**
+ * Locate and STRUCTURALLY validate the authoritative reading-contract JSON
+ * block. Tries the P0-C1 explicitly-marked format first (wherever it appears
+ * in the text); falls back to the legacy v0.3 rule (the final fenced ```json
+ * block) only when no start marker is present at all. See the file-level
+ * comment above `READING_CONTRACT_MARKER` for the full rationale.
+ *
+ * Pure and total: no DOM / storage / network / side effects; never throws on
+ * any model output.
+ *
+ * @param {string} markdown  the full model response text
+ * @returns {{ ok: boolean, contract: ReadingContract|null, issues: ReadingContractIssue[] }}
+ */
+export function parseReadingContract(markdown) {
+  const src = typeof markdown === 'string' ? markdown : '';
+
+  const marked = locateMarkedContractBlock(src);
+  if (marked) {
+    if (marked.state === 'COMPLETE') return validateContractJsonText(marked.jsonText);
+    return {
+      ok: false,
+      contract: null,
+      issues: [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(marked.state) }],
+    };
+  }
+
+  return parseLegacyFinalFenceContract(src);
+}
+
+/**
+ * Split a completed model response into its human-readable Markdown and the
+ * authoritative reading-contract JSON block.
+ *
+ * The reading contract is METADATA: it must never reach `repairRuby`,
+ * `enrichMarkdownWithConjugation`, `formatAnalysisResult`, the rendered panel,
+ * Copy / Save-As, or `page.rendered_markdown`.
+ *
+ * Two different stripping policies apply, deliberately:
+ *   - MARKED format: the literal `READING_CONTRACT_MARKER.START` is proof the
+ *     model was attempting to emit a reading contract at that exact spot —
+ *     nothing else in the prompt ever asks for that string. Once the block's
+ *     boundaries are known (a closed fence, or a truncated one that runs to
+ *     end-of-string), the whole block is ALWAYS stripped, whether or not its
+ *     JSON validates — it can never be legitimate human-readable prose either
+ *     way. Validity only decides whether `readingContract` is populated or
+ *     `contractIssues` reports why it wasn't.
+ *   - LEGACY format (no marker at all): unchanged v0.3 behavior. There is no
+ *     equivalent proof-of-intent, only a heuristic ("the final fence mentions
+ *     reading_contract_version"), so this path stays conservative — it
+ *     removes the block ONLY when it can be proven valid, and otherwise
+ *     leaves the response untouched (never delete model/user-visible content
+ *     we cannot prove is a reading contract).
+ *
+ * P0-C1 extraction order (see the file-level comment above
+ * `READING_CONTRACT_MARKER`):
+ *   1. Marked format, wherever it appears: the block from the start marker
+ *      through the end marker (or through the closing fence, if the end
+ *      marker is absent) is removed; everything before AND after it is kept
+ *      verbatim (position-independent — the contract no longer has to be
+ *      last).
+ *   2. A marked attempt that never resolves into a complete, closed fence
+ *      (READING_CONTRACT_TRUNCATED) is debris by construction — a markdown
+ *      fence that never closes swallows everything after it — so everything
+ *      from the start marker to the end of the response is stripped, and
+ *      `hadContract`/`contractIssues` make the failure explicit rather than
+ *      silently reporting "no contract".
+ *   3. Legacy fallback (no marker present at all): unchanged v0.3 behavior —
+ *      the contract must be the final fenced ```json block to be recognized
+ *      or stripped at all.
+ *
+ * Pure and total: no DOM / storage / network / side effects; never throws.
+ *
+ * @param {string} markdown  the full completed model response
+ * @returns {{
+ *   markdown: string,
+ *   readingContract: ReadingContract|null,
+ *   contractIssues: ReadingContractIssue[],
+ *   hadContract: boolean,
+ * }}
+ *   `hadContract` is true whenever a reading-contract attempt was clearly
+ *   intended (a start marker, or a legacy final fence referencing
+ *   `reading_contract_version`), whether or not it validated. `contractIssues`
+ *   is non-empty only in that "intended but invalid/truncated" case — plain
+ *   absence and unrelated JSON report nothing to warn about.
+ */
+export function separateReadingContract(markdown) {
+  const src = typeof markdown === 'string' ? markdown : '';
+
+  const marked = locateMarkedContractBlock(src);
+  if (marked) {
+    if (marked.state === 'COMPLETE') {
+      const parsed = validateContractJsonText(marked.jsonText);
+      const strippedMarkdown = joinAroundRemovedBlock(
+        src.slice(0, marked.startIdx),
+        src.slice(marked.endMarkerEnd),
+      );
+      return {
+        markdown: strippedMarkdown,
+        readingContract: parsed.ok ? parsed.contract : null,
+        contractIssues: parsed.ok ? [] : parsed.issues,
+        hadContract: true,
+      };
+    }
+    // Truncated/malformed marked attempt: strip from the start marker onward
+    // (never valid prose — see the doc comment above) and report it plainly.
+    return {
+      markdown: src.slice(0, marked.startIdx).replace(/[ \t\r\n]+$/, ''),
+      readingContract: null,
+      contractIssues: [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(marked.state) }],
+      hadContract: true,
+    };
+  }
+
+  return separateLegacyFinalFenceContract(src);
 }
 
 // --- ruby reconciliation (v0.2 Phase 2B-2) ----------------------------------

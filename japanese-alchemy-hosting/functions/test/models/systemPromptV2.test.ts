@@ -304,68 +304,18 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toContain("不得放羅馬拼音、重音（pitch accent）、JLPT 等級、翻譯或語意說明");
     });
 
-    it("G: mandates the fence be the final non-whitespace content, with no trailing prose", () => {
-      expect(SYSTEM_PROMPT_V2).toContain("必須是整個回應的最後非空白內容");
-      expect(SYSTEM_PROMPT_V2).toContain("其後不得再有任何文字、標題或區塊");
+    it("G (superseded by P0-C1 below): still documents the contract's kana/reading rules", () => {
+      // The "must be final, nothing after it" requirement was replaced by the
+      // P0-C1 marker-based, first-position contract (see the P0-C1 describe
+      // block below) — kept here only to confirm the surrounding rule text
+      // (unrelated to position) is untouched.
       expect(SYSTEM_PROMPT_V2).toContain("語言標籤為 json 的 fenced code block");
-      expect(SYSTEM_PROMPT_V2).toContain("讀音契約之後不得再有任何內容");
-    });
-
-    it("H: orders managed sections 原句→單字分析→文法分析→搭配分析→語體／新聞表現→讀音契約, with no 漢字提取", () => {
-      const order = ["### 原句", "### 單字分析", "### 文法分析", "### 搭配分析", "### 語體／新聞表現"];
-      let cursor = -1;
-      for (const heading of order) {
-        const at = SYSTEM_PROMPT_V2.indexOf(heading, cursor + 1);
-        expect(at).toBeGreaterThan(cursor);
-        cursor = at;
-      }
-      const fenceAt = SYSTEM_PROMPT_V2.indexOf("```json", cursor + 1);
-      expect(fenceAt).toBeGreaterThan(cursor);
-      expect(SYSTEM_PROMPT_V2).not.toContain("### 漢字提取");
+      expect(SYSTEM_PROMPT_V2).toContain("reading_contract_version");
     });
 
     it("keeps inline {漢字|かな} ruby and does not remove it", () => {
       expect(SYSTEM_PROMPT_V2).toContain("本階段人類可讀 Markdown 仍須照常使用 {漢字|かな}");
       expect(SYSTEM_PROMPT_V2).toContain("不要移除既有的行內 ruby");
-    });
-
-    // I: worked-example self-consistency.
-    //
-    // This suite deliberately does NOT import parseReadingContract from
-    // japanese-alchemy-chrome-extension/src/scripts/rubyContract.js. The
-    // hosting Cloud Functions project and the Chrome extension are separate,
-    // independently built/deployed packages with no shared workspace linkage
-    // or existing cross-project import precedent (no other hosting test
-    // imports extension source, and vice versa) — reaching across that
-    // boundary for one test would create a fragile, unversioned coupling
-    // between two repos with different release cycles. Instead this test
-    // re-derives the same narrow schema check inline (fence extraction +
-    // JSON.parse + concatenation equality) rather than duplicating the full
-    // parser (its issue codes, fence-discovery heuristics, etc. are Phase 2A
-    // extension-runtime concerns, out of scope here).
-    it("I: the worked example's trailing fence is itself a self-consistent reading contract", () => {
-      const trimmed = SYSTEM_PROMPT_V2.replace(/\s+$/, "");
-      expect(trimmed.endsWith("```")).toBe(true);
-      const closeIdx = trimmed.lastIndexOf("```");
-      const fenceStart = "```json\n";
-      const openIdx = trimmed.slice(0, closeIdx).lastIndexOf(fenceStart);
-      expect(openIdx).toBeGreaterThan(-1);
-
-      const jsonText = trimmed.slice(openIdx + fenceStart.length, closeIdx);
-      const parsed = JSON.parse(jsonText);
-
-      expect(parsed.reading_contract_version).toBe(1);
-      expect(typeof parsed.source_text).toBe("string");
-      expect(Array.isArray(parsed.tokens)).toBe(true);
-      expect(parsed.tokens.length).toBeGreaterThan(0);
-      expect(parsed.tokens.every((t: any) => typeof t.text === "string" && t.text.length > 0)).toBe(true);
-      expect(
-        parsed.tokens.every((t: any) => t.reading === null || (typeof t.reading === "string" && t.reading.length > 0))
-      ).toBe(true);
-      expect(parsed.tokens.map((t: any) => t.text).join("")).toBe(parsed.source_text);
-      // the example sentence is the same one the human-readable ### 原句 block uses
-      expect(parsed.source_text).toContain("同技術は特に労働力不足");
-      expect(parsed.source_text.endsWith("後押しするという。")).toBe(true);
     });
 
     it("preserves Phase 2B grammar/vocabulary/collocation/register behavior unchanged", () => {
@@ -378,6 +328,100 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toContain("### 語體／新聞表現");
       expect(SYSTEM_PROMPT_V2).toContain("不可簡化為「省略了て」");
       expect(SYSTEM_PROMPT_V2).not.toMatch(/[-•]\s*重音[:：]/);
+    });
+  });
+
+  describe("Phase P0-C1: reading contract moved first, behind an explicit marker", () => {
+    it("A: documents the contract as the FIRST block, not the last", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("必須是整個回應的第一個區塊");
+      expect(SYSTEM_PROMPT_V2).not.toContain("必須是整個回應的最後內容");
+      expect(SYSTEM_PROMPT_V2).not.toContain("必須是整個回應的最後非空白內容");
+      expect(SYSTEM_PROMPT_V2).not.toContain("讀音契約之後不得再有任何內容");
+    });
+
+    it("B: requires the explicit start/end marker sentinels around the fence", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_START -->");
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_END -->");
+    });
+
+    it("C: instructs emitting the contract (through its end marker) before ### 原句 and any prose", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/先完整輸出這整個區塊.*再開始撰寫「### 原句」/s);
+      expect(SYSTEM_PROMPT_V2).toContain("即使後續分析因長度限制被截斷，讀音契約仍然完整存活");
+    });
+
+    it("D: output-order section lists the contract as step 1, before 原句", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/1\.\s*（最先）讀音契約/);
+      const orderSection = SYSTEM_PROMPT_V2.split("## 輸出順序")[1].split("# 内容")[0];
+      const contractAt = orderSection.indexOf("讀音契約");
+      const genkuAt = orderSection.indexOf("原句");
+      expect(contractAt).toBeGreaterThan(-1);
+      expect(genkuAt).toBeGreaterThan(contractAt);
+    });
+
+    it("E: the worked example's marked fence physically precedes every prose section, with no 漢字提取", () => {
+      const startMarkerAt = SYSTEM_PROMPT_V2.indexOf("<!-- READING_CONTRACT_START -->", SYSTEM_PROMPT_V2.indexOf("# 以下為示例與格式"));
+      expect(startMarkerAt).toBeGreaterThan(-1);
+      const order = ["### 原句", "### 單字分析", "### 文法分析", "### 搭配分析", "### 語體／新聞表現"];
+      let cursor = startMarkerAt;
+      for (const heading of order) {
+        const at = SYSTEM_PROMPT_V2.indexOf(heading, cursor + 1);
+        expect(at).toBeGreaterThan(cursor);
+        cursor = at;
+      }
+      expect(SYSTEM_PROMPT_V2).not.toContain("### 漢字提取");
+      // exactly one marked block inside the worked-example section itself (not
+      // a duplicate left behind after the reordering — earlier prose mentions
+      // of the marker text, e.g. in the rule description and output-order
+      // list, are expected and irrelevant here).
+      const exampleSection = SYSTEM_PROMPT_V2.slice(SYSTEM_PROMPT_V2.indexOf("# 以下為示例與格式"));
+      const startCountInExample = exampleSection.split("<!-- READING_CONTRACT_START -->").length - 1;
+      expect(startCountInExample).toBe(1);
+    });
+
+    it("F: the response now ends with human prose (### 語體／新聞表現), not a trailing fence", () => {
+      const trimmed = SYSTEM_PROMPT_V2.replace(/\s+$/, "");
+      expect(trimmed.endsWith("```")).toBe(false);
+      expect(trimmed).toContain("### 語體／新聞表現");
+      const lastHeadingAt = trimmed.lastIndexOf("### 語體／新聞表現");
+      expect(trimmed.indexOf("```", lastHeadingAt)).toBe(-1);
+    });
+
+    // This suite deliberately does NOT import parseReadingContract from
+    // japanese-alchemy-chrome-extension/src/scripts/rubyContract.js — see the
+    // rationale kept from Phase 2C-1 above (separate, independently
+    // built/deployed packages; no existing cross-project import precedent).
+    it("G: the worked example's FIRST marked fence is itself a self-consistent reading contract", () => {
+      const startMarker = "<!-- READING_CONTRACT_START -->";
+      const exampleSectionStart = SYSTEM_PROMPT_V2.indexOf("# 以下為示例與格式");
+      const startMarkerAt = SYSTEM_PROMPT_V2.indexOf(startMarker, exampleSectionStart);
+      expect(startMarkerAt).toBeGreaterThan(-1);
+
+      const fenceStart = "```json\n";
+      const openIdx = SYSTEM_PROMPT_V2.indexOf(fenceStart, startMarkerAt);
+      expect(openIdx).toBeGreaterThan(startMarkerAt);
+      const closeIdx = SYSTEM_PROMPT_V2.indexOf("\n```", openIdx);
+      expect(closeIdx).toBeGreaterThan(openIdx);
+
+      const jsonText = SYSTEM_PROMPT_V2.slice(openIdx + fenceStart.length, closeIdx);
+      const parsed = JSON.parse(jsonText);
+
+      expect(parsed.reading_contract_version).toBe(1);
+      expect(typeof parsed.source_text).toBe("string");
+      expect(Array.isArray(parsed.tokens)).toBe(true);
+      expect(parsed.tokens.length).toBeGreaterThan(0);
+      expect(parsed.tokens.every((t: any) => typeof t.text === "string" && t.text.length > 0)).toBe(true);
+      expect(
+        parsed.tokens.every((t: any) => t.reading === null || (typeof t.reading === "string" && t.reading.length > 0))
+      ).toBe(true);
+      expect(parsed.tokens.map((t: any) => t.text).join("")).toBe(parsed.source_text);
+      // the very next non-whitespace content after the end marker is ### 原句,
+      // using the SAME sentence — i.e. the example is internally consistent.
+      expect(parsed.source_text).toContain("同技術は特に労働力不足");
+      expect(parsed.source_text.endsWith("後押しするという。")).toBe(true);
+      const endMarkerEnd = SYSTEM_PROMPT_V2.indexOf("<!-- READING_CONTRACT_END -->", closeIdx)
+        + "<!-- READING_CONTRACT_END -->".length;
+      const nextHeading = SYSTEM_PROMPT_V2.slice(endMarkerEnd).replace(/^\s+/, "");
+      expect(nextHeading.startsWith("### 原句")).toBe(true);
     });
   });
 });
