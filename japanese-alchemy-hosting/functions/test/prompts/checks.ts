@@ -22,6 +22,19 @@ export interface StructuralCheck {
   patternHint?: string;
 }
 
+/**
+ * P3-A: a curated, high-confidence-only expectation for one Reading Contract
+ * span. TEST/HARNESS metadata only — never part of the production Reading
+ * Contract schema (functions/src/models/types.ts) or of `rubyContract.js`.
+ * Only add entries where the correct reading is context-independent (see the
+ * P2-C audit): ordinary lexical/compound readings and enumerable counters —
+ * never proper nouns or genuinely context-sensitive readings.
+ */
+export interface ExpectedReading {
+  text: string;
+  reading: string;
+}
+
 export interface Fixture {
   id: string;
   input: string;
@@ -31,6 +44,7 @@ export interface Fixture {
   expectedSections: string[];
   targetVersions: PromptVersion[];
   structuralChecks: StructuralCheck[];
+  expectedReadings?: ExpectedReading[];
 }
 
 export interface CheckResult {
@@ -281,6 +295,152 @@ function expectedGrammarCovered(response: string, fixture: Fixture): CheckResult
   return { pass: total === 0 || covered >= 1, detail: `${covered}/${total} covered${missing.length ? `; missing: ${missing.join(", ")}` : ""}` };
 }
 
+// --- P3-A: advisory semantic-reading coverage -------------------------------
+//
+// The Reading Contract is opaque to every check above: nothing validates that
+// tokens[].reading is the linguistically correct kana for its span (see the
+// P2-C audit — 歴史的景観 → れきじてき is structurally perfect and semantically
+// wrong). This section adds ONE deterministic, advisory check against a small
+// curated `expectedReadings` list per fixture. It never guesses a reading
+// itself (no dictionary, no morphology, no on/kun inference) — it only
+// compares the model's own Reading Contract tokens against explicit,
+// hand-picked expectations declared in the fixture.
+//
+// Extraction here is a deliberately minimal, test-only re-implementation of
+// enough of rubyContract.js's marker-first / final-fence-fallback rule to find
+// the contract in a raw response string (Tier 2's `promptQuality.test.ts`
+// only has the raw string, not a pre-parsed contract object). It does not
+// reproduce structural validation (truncation states, source_text grounding,
+// etc.) — a missing/malformed contract simply yields `null` here, which this
+// check reports as NOT_APPLICABLE, never as a semantic-reading failure.
+
+interface ReadingContractToken {
+  text: string;
+  reading: string | null;
+}
+
+const READING_CONTRACT_START_MARKER = '<!-- READING_CONTRACT_START -->';
+
+function tryParseContractTokens(jsonText: string): ReadingContractToken[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    (parsed as { reading_contract_version?: unknown }).reading_contract_version !== 1 ||
+    !Array.isArray((parsed as { tokens?: unknown }).tokens)
+  ) {
+    return null;
+  }
+  const tokens = (parsed as { tokens: unknown[] }).tokens;
+  return tokens.map((t) => {
+    const rawText = (t as { text?: unknown })?.text;
+    const rawReading = (t as { reading?: unknown })?.reading;
+    return {
+      text: typeof rawText === 'string' ? rawText : '',
+      reading: typeof rawReading === 'string' ? rawReading : null,
+    };
+  });
+}
+
+/**
+ * Find the Reading Contract's tokens in a raw model response, or `null` when
+ * none is present / parseable. When the P0-C1 start marker is present, only
+ * the fenced json block immediately following its LAST occurrence is tried
+ * (mirrors rubyContract.js's "last marked attempt is authoritative" rule).
+ * Otherwise, every ```json fence in the response is tried and the LAST one
+ * that parses as a valid contract shape wins (legacy final-fence rule).
+ */
+function extractReadingContractTokens(response: string): ReadingContractToken[] | null {
+  const markerIdx = response.lastIndexOf(READING_CONTRACT_START_MARKER);
+  const searchFrom = markerIdx >= 0 ? markerIdx + READING_CONTRACT_START_MARKER.length : 0;
+
+  const fenceRe = /```json\s*\n([\s\S]*?)\n?```/g;
+  fenceRe.lastIndex = searchFrom;
+  let match: RegExpExecArray | null;
+  let lastValid: ReadingContractToken[] | null = null;
+  while ((match = fenceRe.exec(response)) !== null) {
+    const tokens = tryParseContractTokens(match[1]);
+    if (tokens) {
+      lastValid = tokens;
+      if (markerIdx >= 0) break; // marker present: the fence right after it is authoritative
+    }
+  }
+  return lastValid;
+}
+
+/**
+ * Walk `tokens` looking for a contiguous run whose concatenated `.text`
+ * exactly equals `target` (supports the expected phrase being one token or
+ * spanning several adjacent tokens, regardless of how the model segmented
+ * it), returning the concatenation of those tokens' `.reading` values in
+ * source order. Returns `null` when no contiguous span reproduces `target`.
+ */
+function findConcatenatedReading(tokens: ReadingContractToken[], target: string): string | null {
+  for (let start = 0; start < tokens.length; start += 1) {
+    let text = '';
+    let reading = '';
+    for (let end = start; end < tokens.length; end += 1) {
+      text += tokens[end].text;
+      if (!target.startsWith(text)) break;
+      reading += tokens[end].reading ?? '';
+      if (text === target) return reading;
+    }
+  }
+  return null;
+}
+
+/**
+ * ADVISORY ONLY (P3-A). Declared with `required: false` on every fixture that
+ * uses it — a failure here never enters `requiredPassRate` / the Tier-2 gate.
+ *
+ * - No `expectedReadings` declared on the fixture -> NOT_APPLICABLE (pass).
+ * - No parseable Reading Contract in the response -> NOT_APPLICABLE (pass);
+ *   this is a structural-validity question owned by other checks/P2-B, and is
+ *   deliberately never double-counted as a semantic-reading failure here.
+ * - Otherwise every curated expectation is matched against the contract
+ *   tokens; any not-found span or reading mismatch fails this (advisory)
+ *   check, with expected-vs-actual detail for the report.
+ */
+function expectedReadingsCorrect(response: string, fixture: Fixture): CheckResult {
+  const expectations = fixture.expectedReadings ?? [];
+  if (expectations.length === 0) {
+    return { pass: true, detail: 'NOT_APPLICABLE: fixture declares no expectedReadings' };
+  }
+
+  const tokens = extractReadingContractTokens(response);
+  if (!tokens) {
+    return {
+      pass: true,
+      detail: 'NOT_APPLICABLE: no valid Reading Contract found in response (structural validity is checked elsewhere)',
+    };
+  }
+
+  const lines: string[] = [];
+  let failures = 0;
+  for (const exp of expectations) {
+    const actual = findConcatenatedReading(tokens, exp.text);
+    if (actual === null) {
+      failures += 1;
+      lines.push(`FAIL ${exp.text}: not found as a contiguous token span`);
+    } else if (actual !== exp.reading) {
+      failures += 1;
+      lines.push(`FAIL ${exp.text}: expected "${exp.reading}", got "${actual}"`);
+    } else {
+      lines.push(`PASS ${exp.text}: "${actual}"`);
+    }
+  }
+
+  return {
+    pass: failures === 0,
+    detail: `${expectations.length - failures}/${expectations.length} expected readings correct; ${lines.join('; ')}`,
+  };
+}
+
 function grammarEntries(response: string): string[] {
   return section(response, "文法分析")
     .split(/^####\s+/gm)
@@ -364,6 +524,7 @@ const CHECKS: Record<string, (response: string, fixture: Fixture, version: Promp
   allOutputKanjiAnnotated: (r) => allOutputKanjiAnnotated(r),
   expectedVocabularyCovered: (r, f) => expectedVocabularyCovered(r, f),
   expectedGrammarCovered: (r, f) => expectedGrammarCovered(r, f),
+  expectedReadingsCorrect: (r, f) => expectedReadingsCorrect(r, f),
   v1GrammarShape: (r, _f, v) => (v === "v1" ? grammarShape(r, "v1") : { pass: true, detail: "n/a for v2" }),
   v2GrammarShape: (r, _f, v) => (v === "v2" ? grammarShape(r, "v2") : { pass: true, detail: "n/a for v1" }),
   allFourConditionalsContrasted: (r) => allFourConditionalsContrasted(r),
