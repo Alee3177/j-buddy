@@ -959,14 +959,17 @@ export function separateReadingContract(markdown) {
   return separateLegacyFinalFenceContract(src);
 }
 
-// --- ruby reconciliation (v0.2 Phase 2B-2) ----------------------------------
+// --- ruby reconciliation (v0.2 Phase 2B-2; P2-A canonical source truth) -----
 //
-// When a valid reading contract is present, its tokens are AUTHORITATIVE for the
-// original selected source text. Phase 2B-2 uses them to rebuild the inline ruby
-// of ONE line only — the Japanese source presentation under `### 原句`. It never
+// The request-captured browser selection (`expectedSourceText`) is the sole
+// AUTHORITATIVE source of base characters for ONE line only — the Japanese
+// source presentation under `### 原句`. A valid, grounded reading contract's
+// tokens are used ON TOP of it to add ruby when they positionally
+// reconstruct it (see `buildCanonicalSourceLine`); the contract is never
+// itself a source of base characters, only of readings. Reconciliation never
 // touches 漢字提取 / 單字分析 / 文法分析 / 搭配分析 / 語體 sections, generated
 // examples, templates, recall questions, conjugation forms, or the 翻譯 line:
-// the contract describes 【分析対象】, not generated teaching content.
+// this is about 【分析対象】 fidelity, not generated teaching content.
 
 export const RUBY_RECONCILE_ISSUE_CODES = Object.freeze({
   // The contract's source_text is not exactly the browser-selected analysis
@@ -978,6 +981,14 @@ export const RUBY_RECONCILE_ISSUE_CODES = Object.freeze({
   RECONCILE_SOURCE_LINE_AMBIGUOUS: 'RECONCILE_SOURCE_LINE_AMBIGUOUS',
   // The visible ### 原句 surface is not exactly the contract's source_text.
   RECONCILE_SOURCE_TEXT_MISMATCH: 'RECONCILE_SOURCE_TEXT_MISMATCH',
+  // P2-A: a grounded contract's tokens do not positionally reconstruct
+  // expectedSourceText (see buildCanonicalSourceLine). Informational only —
+  // ruby is simply omitted, plain expectedSourceText is still written.
+  RECONCILE_TOKEN_ALIGNMENT_MISMATCH: 'RECONCILE_TOKEN_ALIGNMENT_MISMATCH',
+  // P2-A: expectedSourceText itself spans more than one line. The single-line
+  // "### 原句" content-line model can't faithfully represent that, so no
+  // replacement is attempted at all rather than silently collapsing/joining.
+  RECONCILE_MULTILINE_SOURCE_NOT_SUPPORTED: 'RECONCILE_MULTILINE_SOURCE_NOT_SUPPORTED',
 });
 const RCN = RUBY_RECONCILE_ISSUE_CODES;
 
@@ -1012,6 +1023,55 @@ function reconstructCanonicalRuby(tokens) {
 }
 
 /**
+ * P2-A: build the canonical "### 原句" content, using `selectedText` — the
+ * request-captured browser selection, i.e. ground truth — as the ONLY source
+ * of base characters. The model's own "### 原句" line is never a source of
+ * characters, only ever a target to be overwritten.
+ *
+ * When `readingContract` is a validated contract whose tokens positionally
+ * reconstruct `selectedText` exactly (walking left to right: each
+ * `token.text` must match `selectedText` at the current offset, and the
+ * final offset must land exactly on `selectedText.length`), ruby is layered
+ * on top of `selectedText` using those tokens. This is a per-token positional
+ * check, not just an aggregate concatenation check, so it also catches a
+ * pathological token list that concatenates to the right length but not the
+ * right characters at each step.
+ *
+ * On ANY alignment failure — a token whose text doesn't match at its
+ * expected offset, or leftover/missing characters at the end — this fails
+ * closed to plain `selectedText` with no ruby at all. It never falls back to
+ * partial ruby or to the model's own line.
+ *
+ * No normalization of any kind (no trim, NFKC, or width conversion) is ever
+ * applied to `selectedText`.
+ *
+ * @param {string} selectedText
+ * @param {ReadingContract|null} [readingContract]
+ * @returns {{ text: string, aligned: boolean }}
+ *   `aligned` is true only when ruby was successfully layered on; false means
+ *   `text` is plain `selectedText`, either because there was no contract to
+ *   try or because alignment failed.
+ */
+export function buildCanonicalSourceLine(selectedText, readingContract) {
+  const base = typeof selectedText === 'string' ? selectedText : '';
+
+  if (readingContract && typeof readingContract === 'object' && Array.isArray(readingContract.tokens)) {
+    let offset = 0;
+    let ok = true;
+    for (const t of readingContract.tokens) {
+      if (!t || typeof t.text !== 'string' || t.text.length === 0) { ok = false; break; }
+      if (base.slice(offset, offset + t.text.length) !== t.text) { ok = false; break; }
+      offset += t.text.length;
+    }
+    if (ok && offset === base.length) {
+      return { text: reconstructCanonicalRuby(readingContract.tokens), aligned: true };
+    }
+  }
+
+  return { text: base, aligned: false };
+}
+
+/**
  * @typedef {Object} ReconcileRepair
  * @property {'RECONCILE_SOURCE_LINE'} code
  * @property {number} start   source index of the replaced content run (prefix excluded)
@@ -1027,60 +1087,78 @@ function reconstructCanonicalRuby(tokens) {
  */
 
 /**
- * Deterministically reconcile the inline ruby of the `### 原句` source line
- * against an authoritative reading contract.
+ * Deterministically reconcile the `### 原句` source line against ground
+ * truth. Pure, total, deterministic, idempotent, never throws.
  *
- * Pure, total, deterministic, idempotent, never throws.
+ * P2-A: `expectedSourceText` (the request-captured browser selection) is the
+ * ONLY source of base characters that is ever trusted. Every other input —
+ * the model's own visible `### 原句` line, and even the reading contract's
+ * `tokens` — is treated as untrusted until proven to agree with it. This
+ * replaces the pre-P2-A design, where any validation failure (missing
+ * contract, grounding mismatch, source-line mismatch) fell back to a strict
+ * no-op that silently left the model's own — possibly glyph-substituted,
+ * character-dropped, or hallucinated — line on screen (defect classes A/B/C
+ * from the P2-A audit).
  *
- * When `readingContract` is null / not a validated contract, this is a strict
- * no-op (the fallback path — V1 and managed-provider responses are unaffected).
+ * No replacement is attempted at all — a true no-op — only when there is
+ * structurally nothing safe to do:
+ *   - `expectedSourceText` is not a string (no ground truth was supplied at
+ *     all — preserves call sites, if any, that don't yet pass it);
+ *   - `expectedSourceText` contains a newline (a multi-line selection can't
+ *     be faithfully represented by the single-line "### 原句" content-line
+ *     model; reported via RECONCILE_MULTILINE_SOURCE_NOT_SUPPORTED rather
+ *     than silently collapsed/joined);
+ *   - no `### 原句` heading is found, or no non-empty non-`翻譯` content line
+ *     is found beneath it (nothing exists to overwrite);
+ *   - more than one such candidate line exists (genuinely ambiguous which
+ *     physical line is "the" source line; fails closed rather than guessing).
  *
- * When a contract is present it:
- *   0. GROUNDING GUARD: `readingContract.sourceText` must exactly equal
- *      `expectedSourceText` (the request-captured browser selection — the real
- *      ground truth). Both `### 原句` and `sourceText` come from the same model
- *      turn, so without this a self-consistent hallucination would pass. Exact
- *      equality only — no trim / NFKC / width / whitespace normalization. On
- *      mismatch: no reconciliation, one `RECONCILE_SELECTED_TEXT_MISMATCH`.
- *   1. finds the `### 原句` heading and the first non-empty, non-`翻譯` content
- *      line beneath it (before the next `#`/`##`/`###` heading);
- *   2. SOURCE-FIDELITY GUARD: the source line's plain surface — after
- *      `stripRubyMarkup`, and also after the deterministic safe `repairRuby`
- *      pass (so an already-safe-repairable duplicate like `以降{以降|…}` still
- *      qualifies) — must equal `readingContract.sourceText` exactly. Otherwise
- *      it does NOT reconcile and returns a non-fatal issue;
- *   3. replaces ONLY that line's content (line prefix / indentation preserved)
- *      with the canonical ruby rebuilt from the contract tokens.
- *
- * Full authoritative trust chain:
- *   expectedSourceText (browser selection)
- *     === readingContract.sourceText
- *     === stripRubyMarkup(### 原句 surface)   → canonical reconstruction allowed
+ * In every other case exactly one candidate line is identified and is always
+ * left holding ground-truth characters:
+ *   - when the reading contract is grounded (`sourceText === expectedSourceText`)
+ *     AND its tokens positionally reconstruct `expectedSourceText`
+ *     (`buildCanonicalSourceLine`'s `aligned: true`), the line becomes the
+ *     canonical ruby reconstruction;
+ *   - otherwise (contract missing, invalid shape, ungrounded, or its tokens
+ *     fail positional alignment), the line becomes plain `expectedSourceText`
+ *     with no ruby, UNLESS the line's existing plain surface (after
+ *     `stripRubyMarkup`, or after a safe `repairRuby` pass) already equals
+ *     `expectedSourceText` exactly — in that case the line is left completely
+ *     untouched, so a legacy / personal-provider response whose own ruby is
+ *     already correct is never stripped just because no contract exists for
+ *     it.
+ * Each of those non-happy-path conditions still reports the same
+ * `RUBY_RECONCILE_ISSUE_CODES` as before (RECONCILE_SELECTED_TEXT_MISMATCH,
+ * RECONCILE_SOURCE_TEXT_MISMATCH, RECONCILE_TOKEN_ALIGNMENT_MISMATCH) as
+ * non-fatal diagnostics alongside the repair, rather than gating it.
  *
  * @param {string} markdown         human-only Markdown (contract already removed)
  * @param {ReadingContract|null} readingContract
- * @param {string} expectedSourceText  the request-captured selected analysis
- *   target. Not a string → grounding fails (production must always pass it).
+ * @param {string} expectedSourceText  the request-captured selected analysis target
  * @returns {{ text: string, changed: boolean, repairs: ReconcileRepair[], issues: ReconcileIssue[] }}
  */
 export function reconcileRuby(markdown, readingContract, expectedSourceText) {
   const src = typeof markdown === 'string' ? markdown : '';
-  const noop = () => ({ text: src, changed: false, repairs: [], issues: [] });
-  const skip = (code, message) => ({ text: src, changed: false, repairs: [], issues: [{ code, message }] });
+  const noop = (issues) => ({ text: src, changed: false, repairs: [], issues: issues || [] });
 
-  if (!readingContract
-      || typeof readingContract !== 'object'
-      || typeof readingContract.sourceText !== 'string'
-      || !Array.isArray(readingContract.tokens)) {
+  if (typeof expectedSourceText !== 'string') {
     return noop();
   }
-
-  // Grounding: the contract must describe the ACTUAL selected text, byte-for-byte.
-  if (typeof expectedSourceText !== 'string'
-      || readingContract.sourceText !== expectedSourceText) {
-    return skip(RCN.RECONCILE_SELECTED_TEXT_MISMATCH,
-      'The reading contract source_text is not exactly the selected analysis target.');
+  if (expectedSourceText.includes('\n')) {
+    return noop([{
+      code: RCN.RECONCILE_MULTILINE_SOURCE_NOT_SUPPORTED,
+      message: 'expectedSourceText spans multiple lines; the single-line "### 原句" content line cannot represent it, so no replacement was attempted.',
+    }]);
   }
+
+  // A response with no reading contract at all (readingContract === null,
+  // e.g. legacy/personal-provider output, or a fixture that never intended
+  // Reading-Contract-driven analysis) never even claimed to have a "### 原句"
+  // section — its structural absence is not reportable. Only report it when
+  // a contract argument was actually supplied (even if later found invalid /
+  // ungrounded / misaligned), since that is the actual signal that the
+  // Reading-Contract-aware format was expected here.
+  const contractWasSupplied = readingContract !== null && readingContract !== undefined;
 
   const lines = src.split('\n');
 
@@ -1089,7 +1167,9 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
     if (RE_GENKU_HEADING.test(lines[i])) { headingIdx = i; break; }
   }
   if (headingIdx === -1) {
-    return skip(RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, 'No "### 原句" section in the analysis.');
+    return noop(contractWasSupplied
+      ? [{ code: RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, message: 'No "### 原句" section in the analysis.' }]
+      : []);
   }
 
   const candidates = [];
@@ -1105,29 +1185,69 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
     candidates.push({ lineIdx: i, cr, prefix, content });
   }
   if (candidates.length === 0) {
-    return skip(RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, 'No source line under "### 原句".');
+    return noop(contractWasSupplied
+      ? [{ code: RCN.RECONCILE_SOURCE_LINE_NOT_FOUND, message: 'No source line under "### 原句".' }]
+      : []);
+  }
+  if (candidates.length > 1) {
+    return noop([{
+      code: RCN.RECONCILE_SOURCE_LINE_AMBIGUOUS,
+      message: 'More than one "### 原句" line was found; leaving it unchanged rather than guessing which to replace.',
+    }]);
   }
 
-  const { sourceText } = readingContract;
-  const surfacesMatch = (content) => {
-    if (stripRubyMarkup(content) === sourceText) return true;
-    const safe = repairRuby(content);
-    return safe.changed && stripRubyMarkup(safe.text) === sourceText;
-  };
-  const matching = candidates.filter((c) => surfacesMatch(c.content));
-  if (matching.length === 0) {
-    return skip(RCN.RECONCILE_SOURCE_TEXT_MISMATCH,
-      'The "### 原句" source line plain surface does not equal the contract source_text.');
-  }
-  if (matching.length > 1) {
-    return skip(RCN.RECONCILE_SOURCE_LINE_AMBIGUOUS,
-      'More than one "### 原句" line matches the contract source_text.');
+  const target = candidates[0];
+  const issues = [];
+
+  let contractForBuild = null;
+  if (readingContract && typeof readingContract === 'object'
+      && typeof readingContract.sourceText === 'string'
+      && Array.isArray(readingContract.tokens)) {
+    if (readingContract.sourceText !== expectedSourceText) {
+      issues.push({
+        code: RCN.RECONCILE_SELECTED_TEXT_MISMATCH,
+        message: 'The reading contract source_text is not exactly the selected analysis target.',
+      });
+    } else {
+      contractForBuild = readingContract;
+    }
   }
 
-  const target = matching[0];
-  const canonical = reconstructCanonicalRuby(readingContract.tokens);
+  const built = buildCanonicalSourceLine(expectedSourceText, contractForBuild);
+  if (contractForBuild && !built.aligned) {
+    issues.push({
+      code: RCN.RECONCILE_TOKEN_ALIGNMENT_MISMATCH,
+      message: 'The reading contract tokens do not positionally reconstruct the selected analysis target; ruby was omitted.',
+    });
+  }
+
+  let priorMatchesGroundTruth = stripRubyMarkup(target.content) === expectedSourceText;
+  if (!priorMatchesGroundTruth) {
+    const safe = repairRuby(target.content);
+    priorMatchesGroundTruth = safe.changed && stripRubyMarkup(safe.text) === expectedSourceText;
+  }
+  if (!priorMatchesGroundTruth) {
+    issues.push({
+      code: RCN.RECONCILE_SOURCE_TEXT_MISMATCH,
+      message: 'The "### 原句" source line plain surface does not equal the selected analysis target.',
+    });
+  }
+
+  // Canonical resolution order: trustworthy contract ruby wins; otherwise a
+  // detected character-level drift falls back to plain ground truth; only
+  // when neither applies (no contract AND the existing line is already
+  // correct) is the line left exactly as-is.
+  let canonical;
+  if (contractForBuild && built.aligned) {
+    canonical = built.text;
+  } else if (!priorMatchesGroundTruth) {
+    canonical = expectedSourceText;
+  } else {
+    canonical = target.content;
+  }
+
   if (canonical === target.content) {
-    return noop();
+    return noop(issues);
   }
 
   const newLines = lines.slice();
@@ -1146,6 +1266,6 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
       before: target.content,
       after: canonical,
     }],
-    issues: [],
+    issues,
   };
 }

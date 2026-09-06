@@ -1444,7 +1444,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
     expect(response).not.toContain('関東も週末|かんとう');
   });
 
-  test('HALLUCINATION GUARD: contract self-consistent with ### 原句 but not the selected text → no rewrite, one grounding warning', async () => {
+  test('HALLUCINATION GUARD: contract self-consistent with ### 原句 but not the selected text → ground truth (plain, no ruby) overwrites it, grounding warning still fires (P2-A)', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
@@ -1474,8 +1474,12 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       expect(saveForLaterBtn.disabled).toBe(false);
 
       const response = global.localStorage.getItem('lastResponse');
-      // NO authoritative rewrite — the model's ### 原句 line is left as-is
-      expect(response).toContain('  - {台風|たいふう}25{号|ごう}{発生|はっせい}');
+      // ground truth wins: the hallucinated contract is never trusted, so the
+      // line becomes plain ground-truth text (no ruby) rather than being left
+      // showing the wrong "25"
+      expect(response).toContain('  - 台風24号発生');
+      expect(response).not.toContain('たいふう');
+      expect(response).not.toContain('25');
       // contract still stripped (2B-1)
       expect(response).not.toContain('reading_contract_version');
 
@@ -1483,6 +1487,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
       // no selected or model text in the warning
       expect(reconcileWarns[0][0]).not.toMatch(/台風|24|25|発生|source_text|apiKey|Bearer|Authorization/);
     } finally {
@@ -1534,7 +1539,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
     expect(md).toContain('#### <單字>{最接近|さいせっきん}する');
   });
 
-  test('F: a response with no reading contract is unchanged (Phase 1B behaviour preserved)', async () => {
+  test('F: a response with no reading contract still gets its ### 原句 line corrected against ground truth (P2-A)', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
@@ -1547,15 +1552,42 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       apiCalls[0].resolve();
       await request;
 
-      // no contract → no reconciliation → the wrong reading is NOT fixed
-      expect(global.localStorage.getItem('lastResponse')).toBe(human);
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('reconciliation'))).toBe(false);
+      // no contract to add ruby from, but the visible line disagreed with the
+      // actual selection ("3日以降" vs "3日以降の天気"), so ground truth
+      // (plain, no ruby) still overwrites it
+      const response = global.localStorage.getItem('lastResponse');
+      expect(response).toContain('  - 3日以降の天気');
+      expect(response).not.toContain('にち');
+      const reconcileWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
+      expect(reconcileWarns).toHaveLength(1);
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
     } finally {
       warnSpy.mockRestore();
     }
   });
 
-  test('G: grounded contract but the ### 原句 visible surface differs → completes, one RECONCILE_SOURCE_TEXT_MISMATCH warning, source line unchanged', async () => {
+  test("F2: legacy/personal-provider compatibility — no contract + a ### 原句 line that's already ground-truth-correct is left byte-for-byte untouched", async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する';
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(human);
+      apiCalls[0].resolve();
+      await request;
+
+      expect(global.localStorage.getItem('lastResponse')).toBe(human);
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('G: grounded contract but the ### 原句 visible surface differs → the grounded contract reconstruction overwrites it, one RECONCILE_SOURCE_TEXT_MISMATCH warning (P2-A)', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
@@ -1583,7 +1615,8 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       expect(result.classList.contains('show')).toBe(true);
       expect(saveForLaterBtn.disabled).toBe(false);
       const response = global.localStorage.getItem('lastResponse');
-      expect(response).toContain('  - {台風|たいふう}が{沖縄|おきなわ}に{接近|せっきん}中'); // untouched
+      expect(response).toContain('  - {台風|たいふう}が{接近|せっきん}する'); // rebuilt from the grounded contract
+      expect(response).not.toContain('沖縄');
       expect(response).not.toContain('reading_contract_version'); // still stripped (valid contract)
 
       const reconcileWarns = warnSpy.mock.calls
@@ -1783,13 +1816,14 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
     }
   });
 
-  test('E: a selection-grounded contract still persists reading when the ### 原句 line differs', async () => {
+  test('E: a selection-grounded contract still persists reading when the ### 原句 line differs (and the grounded contract now also fixes the visible line, P2-A)', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const { calls, saved } = deferredSaveApi();
       setupElements();
       // grounding passes (selection === contract source_text); the model's
-      // ### 原句 line shows a paraphrase, so reconcile skips the line rewrite
+      // ### 原句 line shows a paraphrase, so reconcile rebuilds it from the
+      // grounded contract tokens
       const human = '### 原句\n  - {台風|たいふう}が{沖縄|おきなわ}に{接近|せっきん}中\n\n### 文法分析\n（無）';
 
       const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
@@ -1799,8 +1833,9 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       await request;
 
       const response = global.localStorage.getItem('lastResponse');
-      // source line NOT rewritten — reconciliation skipped
-      expect(response).toContain('  - {台風|たいふう}が{沖縄|おきなわ}に{接近|せっきん}中');
+      // source line rebuilt from the grounded contract (P2-A)
+      expect(response).toContain('  - {台風|たいふう}が{接近|せっきん}する');
+      expect(response).not.toContain('沖縄');
       const reconcileWarns = warnSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);

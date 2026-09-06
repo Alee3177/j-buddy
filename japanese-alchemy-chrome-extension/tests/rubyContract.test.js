@@ -15,6 +15,7 @@ import {
   parseReadingContract,
   separateReadingContract,
   reconcileRuby,
+  buildCanonicalSourceLine,
   stripRubyMarkup,
   READING_CONTRACT_ISSUE_CODES as RC,
   RUBY_RECONCILE_ISSUE_CODES as RCN,
@@ -826,12 +827,12 @@ describe('rubyContract.reconcileRuby', () => {
     expect(reconcileRuby(md, { nope: true }, '3日以降').issues).toEqual([]);
   });
 
-  test('J: ### 原句 surface ≠ contract source_text (but grounded) → RECONCILE_SOURCE_TEXT_MISMATCH', () => {
+  test('J: ### 原句 surface ≠ contract source_text (but grounded) → ground truth still wins, RECONCILE_SOURCE_TEXT_MISMATCH is diagnostic only (P2-A)', () => {
     const c = contract('まったく別のテキスト', [tk('まったく'), tk('別', 'べつ'), tk('のテキスト')]);
     const md = '### 原句\n  - {台風|たいふう}が{接近|せっきん}\n\n### x';
     const r = reconcile(md, c); // expected === c.sourceText, so grounding passes
-    expect(r.text).toBe(md);
-    expect(r.changed).toBe(false);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('  - まったく{別|べつ}のテキスト');
     expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
   });
 
@@ -864,18 +865,20 @@ describe('rubyContract.reconcileRuby', () => {
     expect(sourceLine(r.text)).toBe('\t- ３{号|ごう}　🌀'); // tab + "- " prefix + U+3000 kept
   });
 
-  test('N: malformed existing ruby whose plain surface cannot be proven → conservative no-op + issue', () => {
+  test('N: malformed existing ruby is overwritten by the grounded canonical reconstruction — ground truth wins (P2-A)', () => {
     const c = contract('流れ込み', [tk('流', 'なが'), tk('れ'), tk('込', 'こ'), tk('み')]);
     const md = '### 原句\n  - {流|なが}れ込|こ}み\n\n### x';
     const r = reconcile(md, c);
-    expect(r.text).toBe(md);
-    expect(r.changed).toBe(false);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('  - {流|なが}れ{込|こ}み');
     expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
   });
 
-  test('O: a structurally-valid empty source_text is handled safely (no throw, no-op)', () => {
+  test('O: a structurally-valid empty source_text is handled safely (no throw); ground truth still overwrites (P2-A)', () => {
     const r = reconcileRuby('### 原句\n  - something\n\n### x', { version: 1, sourceText: '', tokens: [] }, '');
-    expect(r.changed).toBe(false);
+    expect(r.changed).toBe(true);
+    expect(r.text).toBe('### 原句\n  - \n\n### x');
+    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
     expect(() => reconcileRuby('### 原句\n\n### x', { version: 1, sourceText: '', tokens: [] }, '')).not.toThrow();
   });
 
@@ -923,16 +926,15 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
     expect(r.issues).toEqual([]);
   });
 
-  test('2 (CRITICAL): contract matches ### 原句 surface but NOT the selected text → RECONCILE_SELECTED_TEXT_MISMATCH, no rebuild', () => {
+  test('2 (CRITICAL): contract matches ### 原句 surface but NOT the selected text → ground truth (plain, no ruby) overwrites it (P2-A)', () => {
     const c = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
     const md = '### 原句\n- 3{日|にち}{以降|いこう}\n\n### 漢字提取';
     const r = reconcileRuby(md, c, '4日以降'); // user actually selected 4日以降
 
-    expect(r.changed).toBe(false);
-    expect(r.text).toBe(md); // original Markdown byte-for-byte
-    expect(r.repairs).toEqual([]);
-    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
-    expect(r.text).not.toContain('みっか'); // the source line was NOT rebuilt
+    expect(r.changed).toBe(true);
+    expect(r.text.split('\n')[1]).toBe('- 4日以降'); // ground truth, plain — the hallucinated contract is never trusted
+    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH, RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
+    expect(r.text).not.toContain('みっか'); // the contract's ruby was never used
   });
 
   test('3: self-consistent hallucination — model ### 原句 and contract both say 台風25号発生, selection is 台風24号発生', () => {
@@ -943,12 +945,12 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
     // both model-side values agree with each other — only the ground truth differs
     const r = reconcileRuby(md, c, '台風24号発生');
 
-    expect(r.changed).toBe(false);
-    expect(r.text).toBe(md);
-    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
+    expect(r.changed).toBe(true);
+    expect(r.text.split('\n')[1]).toBe('  - 台風24号発生'); // ground truth wins even over a self-consistent hallucination
+    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH, RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
   });
 
-  test('4: whitespace-exact grounding — a single U+3000 / ASCII / newline difference fails grounding', () => {
+  test('4: whitespace-exact grounding — a U+3000/ASCII/leading-space difference still gets overwritten with ground truth; a newline is refused outright', () => {
     const tokens = [tk('台風', 'たいふう'), tk('　'), tk('接近', 'せっきん')];
     const c = contract('台風　接近', tokens); // full-width space
     const md = '### 原句\n- {台風|たいぷう}　{接近|せっきん}'; // wrong reading たいぷう
@@ -957,25 +959,38 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
     const okr = reconcileRuby(md, c, '台風　接近');
     expect(okr.changed).toBe(true);
     expect(okr.text.split('\n')[1]).toBe('- {台風|たいふう}　{接近|せっきん}');
-    // ASCII space instead of U+3000 → grounding fails (no normalization)
-    expect(reconcileRuby(md, c, '台風 接近').issues.map((i) => i.code))
-      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
-    // trailing newline → grounding fails (no trim)
-    expect(reconcileRuby(md, c, '台風　接近\n').issues.map((i) => i.code))
-      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
-    // leading space → grounding fails (no trim)
-    expect(reconcileRuby(md, c, ' 台風　接近').issues.map((i) => i.code))
-      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
+
+    // ASCII space instead of U+3000 → grounding fails (no normalization), but the
+    // line is still overwritten with the plain ASCII-space ground truth (no ruby)
+    const asciiR = reconcileRuby(md, c, '台風 接近');
+    expect(asciiR.changed).toBe(true);
+    expect(asciiR.text.split('\n')[1]).toBe('- 台風 接近');
+    expect(asciiR.issues.map((i) => i.code))
+      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH, RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
+
+    // trailing newline → a multi-line expectedSourceText can't be represented by
+    // the single-line "### 原句" content line; refused outright, no replacement
+    const newlineR = reconcileRuby(md, c, '台風　接近\n');
+    expect(newlineR.changed).toBe(false);
+    expect(newlineR.text).toBe(md);
+    expect(newlineR.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_MULTILINE_SOURCE_NOT_SUPPORTED]);
+
+    // leading space → grounding fails (no trim), still overwritten with ground truth
+    const leadingR = reconcileRuby(md, c, ' 台風　接近');
+    expect(leadingR.changed).toBe(true);
+    expect(leadingR.text.split('\n')[1]).toBe('-  台風　接近');
+    expect(leadingR.issues.map((i) => i.code))
+      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH, RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
   });
 
-  test('expectedSourceText missing / not a string → grounding fails (production must pass it)', () => {
+  test('expectedSourceText missing / not a string → true no-op (no ground truth supplied at all, P2-A)', () => {
     const c = contract('あ', [tk('あ')]);
     const md = '### 原句\n- {あ|あ}';
-    expect(reconcileRuby(md, c).issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
-    expect(reconcileRuby(md, c, 123).issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
+    expect(reconcileRuby(md, c)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(reconcileRuby(md, c, 123)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
   });
 
-  test('trust chain: selection === contract.sourceText === stripped ### 原句 surface enables reconstruction', () => {
+  test('trust chain: selection === contract.sourceText === stripped ### 原句 surface enables ruby reconstruction; a broken link still gets plain ground truth', () => {
     const c = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
     const md = '### 原句\n- 3{日|にち}{以降|いこう}';
     const selected = '3日以降';
@@ -988,9 +1003,130 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
     const r = reconcileRuby(md, c, selected);
     expect(sourceLine(r.text)).toBe('- 3{日|みっか}{以降|いこう}');
 
-    // break link 1 only → refuse
-    expect(reconcileRuby(md, c, '別のテキスト').issues.map((i) => i.code))
-      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH]);
+    // break link 1 only → the contract is not trusted, but ground truth still
+    // overwrites the line with plain '別のテキスト' (P2-A)
+    const broken = reconcileRuby(md, c, '別のテキスト');
+    expect(broken.changed).toBe(true);
+    expect(broken.text.split('\n')[1]).toBe('- 別のテキスト');
+    expect(broken.issues.map((i) => i.code))
+      .toEqual([RCN.RECONCILE_SELECTED_TEXT_MISMATCH, RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
+  });
+});
+
+describe('rubyContract.buildCanonicalSourceLine (P2-A)', () => {
+  const tk = (text, reading = null) => ({ text, reading });
+
+  test('aligned tokens reconstruct ruby on top of selectedText', () => {
+    const contract = { version: 1, sourceText: '3日以降', tokens: [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')] };
+    expect(buildCanonicalSourceLine('3日以降', contract)).toEqual({ text: '3{日|みっか}{以降|いこう}', aligned: true });
+  });
+
+  test('no contract → plain selectedText passthrough, aligned:false', () => {
+    expect(buildCanonicalSourceLine('台風接近', null)).toEqual({ text: '台風接近', aligned: false });
+    expect(buildCanonicalSourceLine('台風接近', undefined)).toEqual({ text: '台風接近', aligned: false });
+  });
+
+  test('alignment fails closed when tokens concatenate to a DIFFERENT string than selectedText', () => {
+    const contract = { version: 1, sourceText: '3日以降', tokens: [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')] };
+    expect(buildCanonicalSourceLine('4日以降', contract)).toEqual({ text: '4日以降', aligned: false });
+  });
+
+  test('alignment fails closed on a token boundary mismatch mid-string', () => {
+    // Tokens concatenate to '関東週末も', not the '関東も週末' being aligned against.
+    const contract = { version: 1, sourceText: '関東週末も', tokens: [tk('関東', 'かんとう'), tk('週末', 'しゅうまつ'), tk('も')] };
+    expect(buildCanonicalSourceLine('関東も週末', contract)).toEqual({ text: '関東も週末', aligned: false });
+  });
+
+  test('never normalizes: full-width space and an astral-plane emoji are preserved verbatim', () => {
+    const selected = '３号　🌀';
+    const contract = { version: 1, sourceText: selected, tokens: [tk('３'), tk('号', 'ごう'), tk('　'), tk('🌀')] };
+    expect(buildCanonicalSourceLine(selected, contract)).toEqual({ text: '３{号|ごう}　🌀', aligned: true });
+  });
+});
+
+describe('rubyContract.reconcileRuby — P2-A canonical source-of-truth defect classes', () => {
+  const contract = (sourceText, tokens) => ({ version: 1, sourceText, tokens });
+  const tk = (text, reading = null) => ({ text, reading });
+  const sourceLine = (md, n = 1) => md.split('\n')[n];
+
+  test('glyph substitution 伝→傳 is corrected by a grounded contract', () => {
+    const selected = '手紙を伝える';
+    const c = contract(selected, [tk('手紙', 'てがみ'), tk('を'), tk('伝', 'つた'), tk('える')]);
+    const md = '### 原句\n- {手紙|てがみ}を{傳|つた}える\n\n### 單字分析';
+    const r = reconcileRuby(md, c, selected);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- {手紙|てがみ}を{伝|つた}える');
+    expect(stripRubyMarkup(sourceLine(r.text))).toBe(`- ${selected}`);
+  });
+
+  test('glyph substitution 続→續 is corrected by a grounded contract', () => {
+    const selected = '交渉を続ける';
+    const c = contract(selected, [tk('交渉', 'こうしょう'), tk('を'), tk('続', 'つづ'), tk('ける')]);
+    const md = '### 原句\n- {交渉|こうしょう}を{續|つづ}ける\n\n### 單字分析';
+    const r = reconcileRuby(md, c, selected);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- {交渉|こうしょう}を{続|つづ}ける');
+  });
+
+  test('glyph substitution 気→氣 is corrected by a grounded contract', () => {
+    const selected = '天気が良い';
+    const c = contract(selected, [tk('天気', 'てんき'), tk('が'), tk('良い', 'よい')]);
+    const md = '### 原句\n- {天氣|てんき}が{良い|よい}\n\n### 單字分析';
+    const r = reconcileRuby(md, c, selected);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- {天気|てんき}が{良い|よい}');
+  });
+
+  test('dropped okurigana (め) is restored by a grounded contract', () => {
+    const selected = '認める';
+    const c = contract(selected, [tk('認める', 'みとめる')]);
+    const md = '### 原句\n- {認る|みとめる}\n\n### 單字分析'; // model dropped め from the base
+    const r = reconcileRuby(md, c, selected);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- {認める|みとめる}');
+    expect(stripRubyMarkup(sourceLine(r.text))).toBe(`- ${selected}`);
+  });
+
+  test('missing contract fallback (readingContract: null) still fixes a drifted visible line with plain ground truth', () => {
+    const selected = '認める';
+    const md = '### 原句\n- {認る|みとめる}\n\n### 單字分析';
+    const r = reconcileRuby(md, null, selected);
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- 認める'); // plain — no trustworthy contract to add ruby from
+    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
+  });
+
+  test('invalid contract shape fallback (tokens missing) still fixes a drifted visible line with plain ground truth', () => {
+    const selected = '認める';
+    const md = '### 原句\n- {認る|みとめる}\n\n### 單字分析';
+    const r = reconcileRuby(md, { version: 1, sourceText: selected }, selected); // tokens missing entirely
+    expect(r.changed).toBe(true);
+    expect(sourceLine(r.text)).toBe('- 認める');
+    expect(r.issues.map((i) => i.code)).toEqual([RCN.RECONCILE_SOURCE_TEXT_MISMATCH]);
+  });
+
+  test('legacy/personal-provider compatibility: no contract + already-correct visible line → true no-op', () => {
+    const selected = '認める';
+    const md = '### 原句\n- {認める|みとめる}\n\n### 單字分析'; // already correct, no contract needed
+    expect(reconcileRuby(md, null, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(reconcileRuby(md, { nope: true }, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+  });
+
+  test('non-"### 原句" sections are byte-identical even when the source line is rewritten', () => {
+    const selected = '認める';
+    const c = contract(selected, [tk('認める', 'みとめる')]);
+    const md = [
+      '### 原句',
+      '- {認る|みとめる}',
+      '',
+      '### 單字分析',
+      '#### <單字>{認める|みとめる}',
+      '  - 自然例句：この{事実|じじつ}を{認める|みとめる}。',
+    ].join('\n');
+    const r = reconcileRuby(md, c, selected);
+    const from = (s) => s.slice(s.indexOf('### 單字分析'));
+    expect(from(r.text)).toBe(from(md));
+    expect(sourceLine(r.text)).toBe('- {認める|みとめる}');
   });
 });
 
