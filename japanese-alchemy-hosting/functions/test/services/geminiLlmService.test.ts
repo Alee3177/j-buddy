@@ -100,6 +100,14 @@ describe("GeminiLlmService", () => {
             model: "test-model",
             temperature: 0.1,
             max_tokens: 8192,
+            extra_body: {
+              google: {
+                thinking_config: {
+                  thinking_budget: 512,
+                  include_thoughts: false,
+                },
+              },
+            },
           }),
         }
       );
@@ -205,6 +213,35 @@ describe("GeminiLlmService", () => {
       const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(payload.stream_options).toEqual({ include_usage: true });
       expect(payload.extra_body.google.thinking_config).toEqual({
+        thinking_budget: 512,
+        include_thoughts: false,
+      });
+    });
+  });
+
+  describe("generation policy parity (P0-0)", () => {
+    const mockResponse = {
+      choices: [{ finish_reason: "stop", message: { content: "Test response" } }],
+    };
+
+    // Tier-2/batch evaluation calls chatCompletion(); production streaming
+    // (the Chrome extension's managed path) calls streamCompletion(). Both
+    // must request the same Gemini generation policy so Tier-2 results are
+    // representative of production behavior.
+    it("chatCompletion and streamCompletion send the same max_tokens and thinking_config", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => mockResponse });
+      await service.chatCompletion(mockSystemPrompt, mockContent);
+      const batchPayload = JSON.parse(mockFetch.mock.calls[0][1].body);
+
+      mockFetch.mockClear();
+      mockFetch.mockResolvedValueOnce({ ok: true });
+      await service.streamCompletion(mockSystemPrompt, mockContent);
+      const streamPayload = JSON.parse(mockFetch.mock.calls[0][1].body);
+
+      expect(batchPayload.max_tokens).toBe(streamPayload.max_tokens);
+      expect(batchPayload.max_tokens).toBe(8192);
+      expect(batchPayload.extra_body).toEqual(streamPayload.extra_body);
+      expect(batchPayload.extra_body.google.thinking_config).toEqual({
         thinking_budget: 512,
         include_thoughts: false,
       });
