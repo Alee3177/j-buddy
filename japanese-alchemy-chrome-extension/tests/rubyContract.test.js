@@ -789,7 +789,7 @@ describe('rubyContract.reconcileRuby', () => {
     const c = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
     const md = '### 原句\n  - 3{日|みっか}{以降|いこう}\n\n### x';
     const r = reconcile(md, c);
-    expect(r).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(r).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: true });
   });
 
   test('F: the 翻譯 line is never modified', () => {
@@ -822,9 +822,10 @@ describe('rubyContract.reconcileRuby', () => {
 
   test('I: no contract → strict no-op (grounding not even reached)', () => {
     const md = '### 原句\n  - 3{日|にち}{以降|いこう}\n\n### x';
-    expect(reconcileRuby(md, null, '3日以降')).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(reconcileRuby(md, null, '3日以降')).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: false });
     expect(reconcileRuby(md, undefined, '3日以降').changed).toBe(false);
     expect(reconcileRuby(md, { nope: true }, '3日以降').issues).toEqual([]);
+    expect(reconcileRuby(md, { nope: true }, '3日以降').readingTrusted).toBe(false);
   });
 
   test('J: ### 原句 surface ≠ contract source_text (but grounded) → ground truth still wins, RECONCILE_SOURCE_TEXT_MISMATCH is diagnostic only (P2-A)', () => {
@@ -986,8 +987,8 @@ describe('rubyContract.reconcileRuby — grounding against the actual selected t
   test('expectedSourceText missing / not a string → true no-op (no ground truth supplied at all, P2-A)', () => {
     const c = contract('あ', [tk('あ')]);
     const md = '### 原句\n- {あ|あ}';
-    expect(reconcileRuby(md, c)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
-    expect(reconcileRuby(md, c, 123)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(reconcileRuby(md, c)).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: false });
+    expect(reconcileRuby(md, c, 123)).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: false });
   });
 
   test('trust chain: selection === contract.sourceText === stripped ### 原句 surface enables ruby reconstruction; a broken link still gets plain ground truth', () => {
@@ -1108,8 +1109,8 @@ describe('rubyContract.reconcileRuby — P2-A canonical source-of-truth defect c
   test('legacy/personal-provider compatibility: no contract + already-correct visible line → true no-op', () => {
     const selected = '認める';
     const md = '### 原句\n- {認める|みとめる}\n\n### 單字分析'; // already correct, no contract needed
-    expect(reconcileRuby(md, null, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
-    expect(reconcileRuby(md, { nope: true }, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [] });
+    expect(reconcileRuby(md, null, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: false });
+    expect(reconcileRuby(md, { nope: true }, selected)).toEqual({ text: md, changed: false, repairs: [], issues: [], readingTrusted: false });
   });
 
   test('non-"### 原句" sections are byte-identical even when the source line is rewritten', () => {
@@ -1127,6 +1128,109 @@ describe('rubyContract.reconcileRuby — P2-A canonical source-of-truth defect c
     const from = (s) => s.slice(s.indexOf('### 單字分析'));
     expect(from(r.text)).toBe(from(md));
     expect(sourceLine(r.text)).toBe('- {認める|みとめる}');
+  });
+});
+
+describe('rubyContract.reconcileRuby — readingTrusted (P2-B)', () => {
+  const contract = (sourceText, tokens) => ({ version: 1, sourceText, tokens });
+  const tk = (text, reading = null) => ({ text, reading });
+
+  test('1: successful single-line reconcile → readingTrusted: true', () => {
+    const c = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
+    const md = '### 原句\n- 3{日|にち}{以降|いこう}';
+    const r = reconcileRuby(md, c, '3日以降');
+    expect(r.changed).toBe(true);
+    expect(r.readingTrusted).toBe(true);
+  });
+
+  test('2: no contract → readingTrusted: false', () => {
+    const md = '### 原句\n- 3{日|にち}{以降|いこう}';
+    expect(reconcileRuby(md, null, '3日以降').readingTrusted).toBe(false);
+  });
+
+  test('3: invalid/ungrounded contract → readingTrusted: false', () => {
+    const c = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
+    const md = '### 原句\n- 3{日|にち}{以降|いこう}';
+    // ungrounded: user actually selected something else
+    expect(reconcileRuby(md, c, '4日以降').readingTrusted).toBe(false);
+    // invalid shape (tokens missing)
+    expect(reconcileRuby(md, { version: 1, sourceText: '3日以降' }, '3日以降').readingTrusted).toBe(false);
+  });
+
+  test('4: multi-line expectedSourceText → readingTrusted: false', () => {
+    const c = contract('3日\n以降', [tk('3日\n以降')]);
+    const md = '### 原句\n- 3日\n以降';
+    expect(reconcileRuby(md, c, '3日\n以降').readingTrusted).toBe(false);
+  });
+
+  test('5: source-line not found (no "### 原句" heading) → readingTrusted: false', () => {
+    const c = contract('あ', [tk('あ')]);
+    const r = reconcileRuby('### 漢字提取\n  - x\n\n### 文法分析', c, 'あ');
+    expect(r.readingTrusted).toBe(false);
+  });
+
+  test('6: ambiguous candidate lines → readingTrusted: false', () => {
+    const c = contract('台風', [tk('台風', 'たいふう')]);
+    const md = '### 原句\n  - {台風|たいふう}\n  - {台風|たいぷう}\n\n### x';
+    expect(reconcileRuby(md, c, '台風').readingTrusted).toBe(false);
+  });
+
+  test('7: canonical reconstruction / token-alignment failure → readingTrusted: false', () => {
+    // grounded (sourceText === expectedSourceText) but tokens concatenate to a
+    // DIFFERENT string ('関東週末も'), so positional alignment fails
+    const c = contract('関東も週末', [tk('関東', 'かんとう'), tk('週末', 'しゅうまつ'), tk('も')]);
+    const md = '### 原句\n- {関東|かんとう}も{週末|しゅうまつ}';
+    const r = reconcileRuby(md, c, '関東も週末');
+    expect(r.readingTrusted).toBe(false);
+  });
+
+  test('8: valid final multi-attempt contract (actually reconciled) → readingTrusted: true', () => {
+    const invalidFirst = contract('3日以降', [tk('3'), tk('日', 'みっか')]); // missing 以降 → SOURCE_MISMATCH at parse time
+    const validSecond = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
+    const markedFence = (obj) => [
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      JSON.stringify({ reading_contract_version: obj.version, source_text: obj.sourceText, tokens: obj.tokens }),
+      '```',
+      READING_CONTRACT_MARKER.END,
+    ].join('\n');
+    const full = [
+      markedFence(invalidFirst),
+      'Let me correct that.',
+      markedFence(validSecond),
+      '',
+      '### 原句',
+      '- 3{日|にち}{以降|いこう}',
+    ].join('\n');
+    const separated = separateReadingContract(full);
+    expect(separated.readingContract).not.toBeNull(); // only the last (valid) attempt is used
+    const r = reconcileRuby(separated.markdown, separated.readingContract, '3日以降');
+    expect(r.readingTrusted).toBe(true);
+    expect(r.changed).toBe(true);
+  });
+
+  test('9: invalid final multi-attempt contract → fail closed, readingTrusted: false', () => {
+    const validFirst = contract('3日以降', [tk('3'), tk('日', 'みっか'), tk('以降', 'いこう')]);
+    const invalidSecond = contract('3日以降', [tk('3'), tk('日', 'みっか')]); // missing 以降 → invalid
+    const markedFence = (obj) => [
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      JSON.stringify({ reading_contract_version: obj.version, source_text: obj.sourceText, tokens: obj.tokens }),
+      '```',
+      READING_CONTRACT_MARKER.END,
+    ].join('\n');
+    const full = [
+      markedFence(validFirst),
+      'Let me reconsider.',
+      markedFence(invalidSecond),
+      '',
+      '### 原句',
+      '- 3{日|にち}{以降|いこう}',
+    ].join('\n');
+    const separated = separateReadingContract(full);
+    expect(separated.readingContract).toBeNull(); // the last attempt is invalid — no fallback to the earlier valid one
+    const r = reconcileRuby(separated.markdown, separated.readingContract, '3日以降');
+    expect(r.readingTrusted).toBe(false);
   });
 });
 

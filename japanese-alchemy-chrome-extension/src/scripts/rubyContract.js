@@ -1132,14 +1132,30 @@ export function buildCanonicalSourceLine(selectedText, readingContract) {
  * RECONCILE_SOURCE_TEXT_MISMATCH, RECONCILE_TOKEN_ALIGNMENT_MISMATCH) as
  * non-fatal diagnostics alongside the repair, rather than gating it.
  *
+ * P2-B: `readingTrusted` is the SINGLE authoritative answer to "was this
+ * exact reading contract accepted and actually used to produce the final
+ * rendered `### 原句` source line" — not merely "was the JSON structurally
+ * valid". It is `true` only when every one of the following holds: a
+ * contract was supplied, its `sourceText` exactly equals `expectedSourceText`,
+ * `expectedSourceText` is a single line, exactly one `### 原句` candidate
+ * line was found, and the contract's tokens positionally reconstruct
+ * `expectedSourceText` (`buildCanonicalSourceLine`'s `aligned: true`). It is
+ * `false` in every other case, including the "already-canonical, nothing to
+ * change" case that still reuses the noop shape. Callers that need to decide
+ * whether this same contract is trustworthy enough to persist elsewhere
+ * (e.g. `structured_json.reading`) MUST read this field rather than
+ * re-deriving grounding independently — that duplication is exactly what let
+ * render and persistence silently disagree for multi-line / ambiguous
+ * responses before P2-B.
+ *
  * @param {string} markdown         human-only Markdown (contract already removed)
  * @param {ReadingContract|null} readingContract
  * @param {string} expectedSourceText  the request-captured selected analysis target
- * @returns {{ text: string, changed: boolean, repairs: ReconcileRepair[], issues: ReconcileIssue[] }}
+ * @returns {{ text: string, changed: boolean, repairs: ReconcileRepair[], issues: ReconcileIssue[], readingTrusted: boolean }}
  */
 export function reconcileRuby(markdown, readingContract, expectedSourceText) {
   const src = typeof markdown === 'string' ? markdown : '';
-  const noop = (issues) => ({ text: src, changed: false, repairs: [], issues: issues || [] });
+  const noop = (issues) => ({ text: src, changed: false, repairs: [], issues: issues || [], readingTrusted: false });
 
   if (typeof expectedSourceText !== 'string') {
     return noop();
@@ -1237,8 +1253,12 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
   // detected character-level drift falls back to plain ground truth; only
   // when neither applies (no contract AND the existing line is already
   // correct) is the line left exactly as-is.
+  // P2-B: this is also the ONE authoritative trust decision — true only when
+  // a grounded contract's tokens were actually used to produce the canonical
+  // source line, never merely "the JSON parsed".
+  const readingTrusted = Boolean(contractForBuild) && built.aligned;
   let canonical;
-  if (contractForBuild && built.aligned) {
+  if (readingTrusted) {
     canonical = built.text;
   } else if (!priorMatchesGroundTruth) {
     canonical = expectedSourceText;
@@ -1247,7 +1267,7 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
   }
 
   if (canonical === target.content) {
-    return noop(issues);
+    return { text: src, changed: false, repairs: [], issues, readingTrusted };
   }
 
   const newLines = lines.slice();
@@ -1267,5 +1287,6 @@ export function reconcileRuby(markdown, readingContract, expectedSourceText) {
       after: canonical,
     }],
     issues,
+    readingTrusted,
   };
 }

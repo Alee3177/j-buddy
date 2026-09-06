@@ -858,31 +858,7 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
                         }
                         const humanMarkdown = separated.markdown;
-                        // v0.3 Phase 1: persist the authoritative reading tokens
-                        // (for future learner memory / review / quiz features)
-                        // as `structured_json.reading`. GROUNDING GATE: only when
-                        // a structurally valid reading contract is present AND its
-                        // `source_text` is byte-for-byte the browser selection
-                        // captured when this request started
-                        // (`selectedTextForRequest`) — no trim / NFKC / width /
-                        // whitespace normalization. This is INDEPENDENT of whether
-                        // reconcileRuby rewrites the `### 原句` line: a source-line
-                        // mismatch / not-found / ambiguous does NOT invalidate
-                        // reading data grounded to the real selection.
-                        // RECONCILE_SELECTED_TEXT_MISMATCH necessarily fails this
-                        // same equality check, so an ungrounded contract is never
-                        // persisted. The contract JSON fence itself never reaches
-                        // any string path — only `separated.readingContract`
-                        // object fields are read here.
-                        const persistedReading = separated.readingContract
-                            && separated.readingContract.sourceText === selectedTextForRequest
-                            ? normalizePersistedReading({
-                                version: 1,
-                                source_text: separated.readingContract.sourceText,
-                                tokens: separated.readingContract.tokens,
-                            })
-                            : null;
-                        // v0.2 Phase 2B-2: when a valid reading contract is
+                        // v0.2 Phase 2B-2 / P2-A: when a valid reading contract is
                         // present AND it is grounded in the actual selected text
                         // (`selectedTextForRequest`, captured when this request
                         // started — never a fresh page-selection read, so a
@@ -893,11 +869,34 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         // / conjugation / parsing. Generated teaching content
                         // (漢字提取 / 單字分析 / 文法分析 / 搭配分析 / 語體 /
                         // examples / templates / the 翻譯 line) is never touched.
-                        // No / invalid / ungrounded contract -> strict no-op (the
-                        // fallback path; V1 + managed-provider are unaffected).
+                        // No / invalid / ungrounded contract -> plain canonical
+                        // fallback (P2-A; V1 + personal-provider lines that are
+                        // already correct are left byte-for-byte untouched).
                         const reconciled = reconcileRuby(
                             humanMarkdown, separated.readingContract, selectedTextForRequest
                         );
+                        // v0.3 Phase 1 / P2-B: persist the authoritative reading
+                        // tokens (for future learner memory / review / quiz
+                        // features) as `structured_json.reading` ONLY when
+                        // `reconciled.readingTrusted` is true — i.e. reconcileRuby
+                        // itself accepted and actually used this exact contract to
+                        // produce the final rendered `### 原句` source line. This
+                        // is the ONE authoritative trust decision; persistence must
+                        // never re-derive grounding independently (a prior,
+                        // independent `sourceText === selectedTextForRequest`
+                        // check here disagreed with render for multi-line and
+                        // ambiguous-candidate-line responses, since it didn't know
+                        // about those render-side refusals — P2-B closes that gap).
+                        // The contract JSON fence itself never reaches any string
+                        // path — only `separated.readingContract` object fields
+                        // (the exact contract reconcileRuby evaluated) are read.
+                        const persistedReading = reconciled.readingTrusted
+                            ? normalizePersistedReading({
+                                version: 1,
+                                source_text: separated.readingContract.sourceText,
+                                tokens: separated.readingContract.tokens,
+                            })
+                            : null;
                         if (reconciled.issues.length > 0) {
                             const reconcileCounts = {};
                             for (const issue of reconciled.issues) {
