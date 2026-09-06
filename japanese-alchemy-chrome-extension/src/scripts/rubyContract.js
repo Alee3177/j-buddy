@@ -397,6 +397,22 @@ export function repairRuby(text) {
 // markdown fence semantics, an unclosed ``` swallows everything after it
 // anyway), so no partial JSON metadata can leak into rendered/copied/saved
 // output.
+//
+// P0-C1.1: a real-model sample can emit the marked block MORE THAN ONCE —
+// e.g. an invalid first attempt, a narrated self-correction, then a second
+// attempt. `locateAllMarkedContractBlocks` finds every occurrence in document
+// order; the LAST occurrence is always treated as the model's final intent
+// and is the ONLY one ever validated — there is no fallback to an earlier
+// valid attempt under any circumstance (a later attempt may deliberately
+// supersede/correct an earlier one, so trusting anything but the last would
+// risk using data the model itself was in the middle of retracting). Stripping
+// always removes the single continuous span from the FIRST occurrence's start
+// through the SELECTED (last) occurrence's end, which removes every earlier
+// attempt, the selected attempt, and any narration in between as one
+// structural unit — no content-based sniffing of what counts as "narration"
+// is needed or performed. Exactly one occurrence reproduces the original
+// P0-C1 behavior byte-for-byte, since the first and selected occurrence are
+// then the same object.
 
 export const READING_CONTRACT_MARKER = Object.freeze({
   START: '<!-- READING_CONTRACT_START -->',
@@ -415,6 +431,11 @@ export const READING_CONTRACT_ISSUE_CODES = Object.freeze({
   // present) but never resolved into a complete, closed json fence — distinct
   // from READING_CONTRACT_NOT_FOUND, which means no attempt was ever made.
   READING_CONTRACT_TRUNCATED: 'READING_CONTRACT_TRUNCATED',
+  // P0-C1.1: more than one marked contract attempt was found. This is purely
+  // informational alongside a real validation failure on the selected (last)
+  // attempt — it never appears by itself, and never causes an otherwise-valid
+  // final attempt to fail.
+  READING_CONTRACT_MULTIPLE_ATTEMPTS: 'READING_CONTRACT_MULTIPLE_ATTEMPTS',
 });
 
 const RC = READING_CONTRACT_ISSUE_CODES;
@@ -653,11 +674,13 @@ function findNextClosingFenceLine(src, from) {
 }
 
 /**
- * Locate the P0-C1 explicitly-marked reading contract anywhere in `src`.
+ * Resolve ONE marked reading-contract attempt whose START marker is already
+ * known to begin at `startIdx` — this function never searches for the marker
+ * itself, so it can be called once per occurrence when scanning for multiple
+ * attempts. This is the exact per-occurrence logic the original P0-C1
+ * single-occurrence locator used, unchanged, just parameterized.
  *
- * Returns `null` when `READING_CONTRACT_MARKER.START` does not appear at all
- * (the caller should fall back to the legacy final-fence rule). Otherwise
- * returns `{ attempted: true, state, startIdx, ... }`:
+ * Returns `{ attempted: true, state, startIdx, ... }`:
  *   - state 'NO_FENCE_STARTED': the start marker is present, but the first
  *     non-whitespace content after it is not a ```json fence open.
  *   - state 'FENCE_NOT_CLOSED': a fence opened right after the marker, but no
@@ -671,14 +694,14 @@ function findNextClosingFenceLine(src, from) {
  * whitespace in between, so a marker can never reach across unrelated prose to
  * grab some later, unrelated ```json block (teaching content, an example,
  * etc.) as if it were the contract.
+ *
+ * @param {string} src
+ * @param {number} startIdx  index of a known `READING_CONTRACT_MARKER.START` occurrence
  */
-function locateMarkedContractBlock(src) {
-  const START = READING_CONTRACT_MARKER.START;
+function resolveMarkedBlockAt(src, startIdx) {
   const END = READING_CONTRACT_MARKER.END;
-  const startIdx = src.indexOf(START);
-  if (startIdx === -1) return null;
 
-  let i = startIdx + START.length;
+  let i = startIdx + READING_CONTRACT_MARKER.START.length;
   while (i < src.length && /\s/.test(src[i])) i += 1;
 
   const open = matchJsonFenceOpenAt(src, i);
@@ -708,10 +731,77 @@ function locateMarkedContractBlock(src) {
   };
 }
 
+/**
+ * Locate EVERY explicitly-marked reading-contract attempt in `src`, in
+ * document order (P0-C1.1).
+ *
+ * Returns `null` when `READING_CONTRACT_MARKER.START` does not appear at all
+ * (the caller should fall back to the legacy final-fence rule) — the same
+ * null-signal contract the original single-occurrence locator used.
+ *
+ * Otherwise returns `{ occurrences, first, selected, occurrenceCount }`:
+ *   - `occurrences`: every resolved attempt, in document order.
+ *   - `first`: `occurrences[0]`. Stripping always begins at its `startIdx`,
+ *     regardless of which occurrence is selected.
+ *   - `selected`: the LAST occurrence — the model's final intent. Multiple
+ *     attempts are never merged or compared; only the last is ever validated
+ *     or used, with no fallback to an earlier valid attempt.
+ *   - `occurrenceCount`: `occurrences.length`. Exactly 1 makes `first` and
+ *     `selected` the same object, reproducing the original P0-C1
+ *     single-occurrence behavior byte-for-byte.
+ *
+ * The scan advances monotonically (an O(n) single forward pass — never
+ * revisits already-resolved text) and stops looking for further occurrences
+ * as soon as one resolves to `FENCE_NOT_CLOSED`: an unclosed fence swallows
+ * everything after it (the existing single-occurrence truncation semantics),
+ * so anything a further `indexOf` might find past that point would actually
+ * be text INSIDE the unclosed fence, not a genuine further attempt.
+ *
+ * @param {string} src
+ * @returns {{ occurrences: object[], first: object, selected: object, occurrenceCount: number }|null}
+ */
+function locateAllMarkedContractBlocks(src) {
+  const START = READING_CONTRACT_MARKER.START;
+  const occurrences = [];
+  let searchFrom = 0;
+
+  // eslint-disable-next-line no-constant-condition -- terminates via break; searchFrom strictly advances each iteration
+  while (true) {
+    const startIdx = src.indexOf(START, searchFrom);
+    if (startIdx === -1) break;
+
+    const block = resolveMarkedBlockAt(src, startIdx);
+    occurrences.push(block);
+
+    if (block.state === 'COMPLETE') {
+      searchFrom = block.endMarkerEnd;
+    } else if (block.state === 'FENCE_NOT_CLOSED') {
+      break;
+    } else {
+      // NO_FENCE_STARTED consumes nothing from src; resume just past this
+      // marker so a later, genuine attempt can still be found.
+      searchFrom = startIdx + START.length;
+    }
+  }
+
+  if (occurrences.length === 0) return null;
+  return {
+    occurrences,
+    first: occurrences[0],
+    selected: occurrences[occurrences.length - 1],
+    occurrenceCount: occurrences.length,
+  };
+}
+
 function truncatedContractMessage(state) {
   return state === 'NO_FENCE_STARTED'
     ? 'A Reading Contract start marker was found but no json fence followed it.'
     : 'A Reading Contract start marker and fence were found but the fence never closed (truncated).';
+}
+
+function multipleAttemptsMessage(occurrenceCount) {
+  return `${occurrenceCount} marked Reading Contract attempts were found; only the last was validated, `
+    + 'with no fallback to any earlier attempt.';
 }
 
 /** Keep `before`'s content and `after`'s content, joined by exactly one blank line when both are non-empty. */
@@ -738,14 +828,20 @@ function joinAroundRemovedBlock(before, after) {
 export function parseReadingContract(markdown) {
   const src = typeof markdown === 'string' ? markdown : '';
 
-  const marked = locateMarkedContractBlock(src);
-  if (marked) {
-    if (marked.state === 'COMPLETE') return validateContractJsonText(marked.jsonText);
-    return {
-      ok: false,
-      contract: null,
-      issues: [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(marked.state) }],
-    };
+  const located = locateAllMarkedContractBlocks(src);
+  if (located) {
+    const { selected, occurrenceCount } = located;
+    const multipleAttemptsIssue = { code: RC.READING_CONTRACT_MULTIPLE_ATTEMPTS, message: multipleAttemptsMessage(occurrenceCount) };
+
+    if (selected.state === 'COMPLETE') {
+      const result = validateContractJsonText(selected.jsonText);
+      if (result.ok || occurrenceCount === 1) return result;
+      return { ok: false, contract: null, issues: [...result.issues, multipleAttemptsIssue] };
+    }
+
+    const issues = [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(selected.state) }];
+    if (occurrenceCount > 1) issues.push(multipleAttemptsIssue);
+    return { ok: false, contract: null, issues };
   }
 
   return parseLegacyFinalFenceContract(src);
@@ -810,28 +906,53 @@ export function parseReadingContract(markdown) {
 export function separateReadingContract(markdown) {
   const src = typeof markdown === 'string' ? markdown : '';
 
-  const marked = locateMarkedContractBlock(src);
-  if (marked) {
-    if (marked.state === 'COMPLETE') {
-      const parsed = validateContractJsonText(marked.jsonText);
+  const located = locateAllMarkedContractBlocks(src);
+  if (located) {
+    const { first, selected, occurrenceCount } = located;
+    // P0-C1.1: stripping always spans from the FIRST occurrence's start
+    // through the SELECTED (last) occurrence's end — this removes every
+    // earlier attempt, the selected attempt itself, and any narration in
+    // between as one continuous structural unit. When occurrenceCount === 1,
+    // `first` and `selected` are the same object, so this is byte-for-byte
+    // the original P0-C1 single-occurrence computation.
+    const attemptCountField = occurrenceCount > 1 ? { contractAttemptCount: occurrenceCount } : {};
+
+    if (selected.state === 'COMPLETE') {
+      const parsed = validateContractJsonText(selected.jsonText);
       const strippedMarkdown = joinAroundRemovedBlock(
-        src.slice(0, marked.startIdx),
-        src.slice(marked.endMarkerEnd),
+        src.slice(0, first.startIdx),
+        src.slice(selected.endMarkerEnd),
       );
+      let contractIssues = [];
+      if (!parsed.ok) {
+        contractIssues = occurrenceCount > 1
+          ? [...parsed.issues, { code: RC.READING_CONTRACT_MULTIPLE_ATTEMPTS, message: multipleAttemptsMessage(occurrenceCount) }]
+          : parsed.issues;
+      }
       return {
         markdown: strippedMarkdown,
         readingContract: parsed.ok ? parsed.contract : null,
-        contractIssues: parsed.ok ? [] : parsed.issues,
+        contractIssues,
         hadContract: true,
+        ...attemptCountField,
       };
     }
-    // Truncated/malformed marked attempt: strip from the start marker onward
-    // (never valid prose — see the doc comment above) and report it plainly.
+    // Truncated/malformed final attempt: strip from the FIRST occurrence's
+    // start onward (never valid prose — see the doc comment above) and report
+    // it plainly. Any earlier, otherwise-valid attempt is discarded too: the
+    // model's last visible intent was this truncated one, so falling back to
+    // an earlier attempt would silently use data the model may have been in
+    // the middle of retracting.
+    const truncationIssues = [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(selected.state) }];
+    if (occurrenceCount > 1) {
+      truncationIssues.push({ code: RC.READING_CONTRACT_MULTIPLE_ATTEMPTS, message: multipleAttemptsMessage(occurrenceCount) });
+    }
     return {
-      markdown: src.slice(0, marked.startIdx).replace(/[ \t\r\n]+$/, ''),
+      markdown: src.slice(0, first.startIdx).replace(/[ \t\r\n]+$/, ''),
       readingContract: null,
-      contractIssues: [{ code: RC.READING_CONTRACT_TRUNCATED, message: truncatedContractMessage(marked.state) }],
+      contractIssues: truncationIssues,
       hadContract: true,
+      ...attemptCountField,
     };
   }
 

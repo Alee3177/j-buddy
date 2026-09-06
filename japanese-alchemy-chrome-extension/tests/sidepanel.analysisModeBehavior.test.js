@@ -1295,6 +1295,89 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
     expect(saved[0].page.rendered_markdown).not.toContain('READING_CONTRACT');
     expect(saved[0].page.rendered_markdown).not.toContain('```');
   });
+
+  test('H (P0-C1.1): a response with TWO marked contract attempts leaves no debris anywhere in the pipeline', async () => {
+    const saved = [];
+    global.JaAlchemyApiService = class {
+      async generateResponseStream(selectedText, promptVariant, context, onChunk, onDone, onError, options) {
+        return new Promise((resolve) => { calls.push({ onDone, resolve }); });
+      }
+      async saveAnalysis(analysis) { saved.push(analysis); return { success: true }; }
+    };
+    var calls = [];
+    const { prose } = setupElements();
+    global.chrome.tabs = { query: jest.fn(async () => [{ url: 'https://example.com/a' }]) };
+
+    const invalidFirst = {
+      reading_contract_version: 1,
+      source_text: '台風が接近する',
+      tokens: [
+        { text: '台風', reading: 'たいふう' },
+        { text: 'が', reading: null },
+        { text: '接近', reading: 'せっきん' },
+        // deliberately missing the final "する" token → concatenation
+        // ("台風が接近") does not equal source_text → SOURCE_MISMATCH.
+      ],
+    };
+    const validSecond = {
+      reading_contract_version: 1,
+      source_text: '台風が接近する',
+      tokens: [
+        { text: '台風', reading: 'たいふう' },
+        { text: 'が', reading: null },
+        { text: '接近', reading: 'せっきん' },
+        { text: 'する', reading: null },
+      ],
+    };
+    const narration = '> [!NOTE]\n> 備註：上述 JSON 契約的 token 拆解有誤，更正精確的 JSON 請見如下。';
+    const human = '### 原句\n  - {台風|たいふう}が{接近|せっきん}する\n\n### 文法分析\n（無）';
+    const fullText = [
+      '<!-- READING_CONTRACT_START -->',
+      readingFence(invalidFirst),
+      '<!-- READING_CONTRACT_END -->',
+      '',
+      narration,
+      '',
+      '<!-- READING_CONTRACT_START -->',
+      readingFence(validSecond),
+      '<!-- READING_CONTRACT_END -->',
+      '',
+      human,
+    ].join('\n');
+
+    const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+    await flushMicrotasks();
+    calls[0].onDone(fullText);
+    calls[0].resolve();
+    await request;
+    await handleSaveForLater();
+
+    const debrisMarkers = [
+      'READING_CONTRACT_START',
+      'READING_CONTRACT_END',
+      'reading_contract_version',
+      '備註',
+      '上述 JSON 契約',
+      '[!NOTE]',
+      '```',
+    ];
+
+    const response = global.localStorage.getItem('lastResponse');
+    expect(response).toBe(human);
+    for (const marker of debrisMarkers) expect(response).not.toContain(marker);
+
+    expect(prose.innerHTML).not.toContain('reading_contract_version');
+    expect(prose.innerHTML).not.toContain('READING_CONTRACT');
+    for (const marker of debrisMarkers) expect(prose.innerHTML).not.toContain(marker);
+
+    const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
+    expect(projection.response).toBe(human);
+    for (const marker of debrisMarkers) expect(projection.html).not.toContain(marker);
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0].page.rendered_markdown).toBe(human);
+    for (const marker of debrisMarkers) expect(saved[0].page.rendered_markdown).not.toContain(marker);
+  });
 });
 
 describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative ruby reconciliation', () => {

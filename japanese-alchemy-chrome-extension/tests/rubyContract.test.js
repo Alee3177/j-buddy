@@ -1202,3 +1202,203 @@ describe('rubyContract — P0-C1 marker-based reading contract', () => {
     expect(r.contract.sourceText).toBe('台風');
   });
 });
+
+// --- P0-C1.1: multiple marked Reading Contract attempts --------------------
+//
+// A real-model sample can emit the marked block more than once — e.g. an
+// invalid first attempt, a narrated self-correction, then a second attempt.
+// These tests pin: the LAST occurrence is always the model's final intent and
+// the only one ever validated (no fallback to an earlier valid attempt under
+// any circumstance); stripping removes the single continuous span from the
+// FIRST occurrence's start through the SELECTED (last) occurrence's end, with
+// no content-based sniffing of what counts as "narration"; and exactly one
+// occurrence reproduces the original P0-C1 behavior byte-for-byte.
+
+describe('rubyContract — P0-C1.1 multiple marked contract attempts', () => {
+  const markedFence = (obj) => [
+    READING_CONTRACT_MARKER.START,
+    '```json',
+    JSON.stringify(obj, null, 2),
+    '```',
+    READING_CONTRACT_MARKER.END,
+  ].join('\n');
+
+  test('1: first invalid + second valid → second selected, both blocks + narration stripped, prose after preserved', () => {
+    const invalidFirst = contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以後', 'いご')]); // concat mismatch
+    const validSecond = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const narration = '*(修正讀音契約以精準對齊 source_text)*';
+    const prose = '### 原句\n  - {台風|たいふう}{接近|せっきん}\n\n### 文法分析\n（無）';
+    const full = `${markedFence(invalidFirst)}\n\n${narration}\n\n${markedFence(validSecond)}\n\n${prose}`;
+
+    const parsed = parseReadingContract(full);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.contract.sourceText).toBe('台風接近');
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.hadContract).toBe(true);
+    expect(sep.contractIssues).toEqual([]);
+    expect(sep.readingContract).toEqual({
+      version: 1,
+      sourceText: '台風接近',
+      tokens: [{ text: '台風', reading: 'たいふう' }, { text: '接近', reading: 'せっきん' }],
+    });
+    expect(sep.markdown).not.toContain(narration);
+    expect(sep.markdown).not.toContain('reading_contract_version');
+    expect(sep.markdown).not.toContain('READING_CONTRACT');
+    expect(sep.markdown).not.toContain('```');
+    expect(sep.contractAttemptCount).toBe(2);
+  });
+
+  test('2: first valid + second invalid → fail closed, no fallback to first', () => {
+    const validFirst = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const invalidSecond = contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以後', 'いご')]);
+    const prose = '### 原句\nprose';
+    const full = `${markedFence(validFirst)}\n\n${markedFence(invalidSecond)}\n\n${prose}`;
+
+    const parsed = parseReadingContract(full);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.contract).toBeNull();
+    expect(rcCodes(parsed)).toEqual([RC.READING_CONTRACT_SOURCE_MISMATCH, RC.READING_CONTRACT_MULTIPLE_ATTEMPTS]);
+
+    const sep = separateReadingContract(full);
+    expect(sep.readingContract).toBeNull();
+    expect(sep.hadContract).toBe(true);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.contractIssues.map((i) => i.code)).toEqual([
+      RC.READING_CONTRACT_SOURCE_MISMATCH,
+      RC.READING_CONTRACT_MULTIPLE_ATTEMPTS,
+    ]);
+    expect(sep.contractAttemptCount).toBe(2);
+  });
+
+  test('3: two valid, distinguishable contracts → the SECOND is used', () => {
+    const first = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const second = contractOf('雨が降る', [tok('雨', 'あめ'), tok('が'), tok('降', 'ふ'), tok('る')]);
+    const full = `${markedFence(first)}\n\n${markedFence(second)}\n\n### 原句\nprose`;
+
+    const parsed = parseReadingContract(full);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.contract.sourceText).toBe('雨が降る');
+
+    const sep = separateReadingContract(full);
+    expect(sep.readingContract.sourceText).toBe('雨が降る');
+    expect(sep.contractAttemptCount).toBe(2);
+  });
+
+  test('4: first complete + second truncated → fail closed with READING_CONTRACT_TRUNCATED, humanMarkdown is only pre-first-marker content', () => {
+    const validFirst = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const before = '### 前情提要\nunrelated earlier prose';
+    const truncatedSecond = [
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      '{ "reading_contract_version": 1, "source_text": "雨が降る", "tokens": [',
+      '  { "text": "雨", "reading": "あ',
+    ].join('\n');
+    const full = `${before}\n\n${markedFence(validFirst)}\n\n${truncatedSecond}`;
+
+    const parsed = parseReadingContract(full);
+    expect(parsed.ok).toBe(false);
+    expect(rcCodes(parsed)).toEqual([RC.READING_CONTRACT_TRUNCATED, RC.READING_CONTRACT_MULTIPLE_ATTEMPTS]);
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(before);
+    expect(sep.readingContract).toBeNull();
+    expect(sep.hadContract).toBe(true);
+    expect(sep.markdown).not.toContain('reading_contract_version');
+    expect(sep.markdown).not.toContain('READING_CONTRACT');
+    expect(sep.contractAttemptCount).toBe(2);
+  });
+
+  test('5: self-correction narration between two complete attempts never leaks', () => {
+    const first = contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以後', 'いご')]);
+    const second = contractOf('3日以降', [tok('3'), tok('日', 'みっか'), tok('以降', 'いこう')]);
+    const narration = '> [!NOTE]\n> 備註：上述 JSON 契約中針對 token 拆解已重新對齊，更正精確的 JSON 請見如下。';
+    const full = `${markedFence(first)}\n\n${narration}\n\n${markedFence(second)}\n\n### 原句\nprose`;
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe('### 原句\nprose');
+    expect(sep.markdown).not.toContain('備註');
+    expect(sep.markdown).not.toContain('上述 JSON 契約');
+    expect(sep.markdown).not.toContain('[!NOTE]');
+  });
+
+  test('6: ordinary prose strictly before the first marker and strictly after the final complete attempt is preserved byte-for-byte', () => {
+    const before = '### 前情提要\nsome genuinely unrelated earlier note';
+    const first = contractOf('台風', [tok('台風', 'たいふう')]);
+    const second = contractOf('雨', [tok('雨', 'あめ')]);
+    const after = '### 原句\n  - {雨|あめ}\n\n### 文法分析\n（無）';
+    const full = `${before}\n\n${markedFence(first)}\n\n${markedFence(second)}\n\n${after}`;
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(`${before}\n\n${after}`);
+    expect(sep.readingContract.sourceText).toBe('雨');
+  });
+
+  test('7: an unrelated json fence elsewhere (no marker) is preserved / ignored, even alongside a genuine two-occurrence contract', () => {
+    const unrelated = '```json\n{"example": true}\n```';
+    const first = contractOf('台風', [tok('台風', 'たいふう')]);
+    const second = contractOf('雨', [tok('雨', 'あめ')]);
+    const prose = `### 原句\n  - {雨|あめ}\n\n${unrelated}\n\n### 文法分析\n（無）`;
+    const full = `${markedFence(first)}\n\n${markedFence(second)}\n\n${prose}`;
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe(prose);
+    expect(sep.markdown).toContain('{"example": true}');
+    expect(sep.readingContract.sourceText).toBe('雨');
+  });
+
+  test('8: legacy final-fence behavior (no marker at all) is completely unchanged', () => {
+    const r = parseReadingContract(asFinalJsonBlock(contractOf('雨', [tok('雨', 'あめ')])));
+    expect(r.ok).toBe(true);
+    expect(r.contract.sourceText).toBe('雨');
+
+    const sep = separateReadingContract(asFinalJsonBlock(contractOf('雨', [tok('雨', 'あめ')])));
+    expect(sep.hadContract).toBe(true);
+    expect(sep.readingContract.sourceText).toBe('雨');
+    expect(sep.contractAttemptCount).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(sep, 'contractAttemptCount')).toBe(false);
+  });
+
+  test('9: a single marked contract (n=1) is byte-for-byte unchanged from pre-P0-C1.1 behavior', () => {
+    const contract = contractOf('台風接近', [tok('台風', 'たいふう'), tok('接近', 'せっきん')]);
+    const prose = '### 原句\n  - {台風|たいふう}{接近|せっきん}\n\n### 文法分析\n（無）';
+    const full = `${markedFence(contract)}\n\n${prose}`;
+
+    const sep = separateReadingContract(full);
+    expect(sep).toEqual({
+      markdown: prose,
+      readingContract: { version: 1, sourceText: '台風接近', tokens: [{ text: '台風', reading: 'たいふう' }, { text: '接近', reading: 'せっきん' }] },
+      contractIssues: [],
+      hadContract: true,
+    });
+    expect(Object.prototype.hasOwnProperty.call(sep, 'contractAttemptCount')).toBe(false);
+  });
+
+  test('11: 3+ repeated START markers terminate correctly and select the LAST occurrence, no infinite loop', () => {
+    const attempts = [
+      contractOf('あ', [tok('あ')]),
+      contractOf('い', [tok('い')]),
+      contractOf('う', [tok('う')]),
+      contractOf('最終', [tok('最終', 'さいしゅう')]),
+    ];
+    const full = attempts.map(markedFence).join('\n\nnarration\n\n') + '\n\n### 原句\nprose';
+
+    const parsed = parseReadingContract(full);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.contract.sourceText).toBe('最終');
+
+    const sep = separateReadingContract(full);
+    expect(sep.markdown).toBe('### 原句\nprose');
+    expect(sep.contractAttemptCount).toBe(4);
+    expect(sep.markdown).not.toContain('narration');
+  });
+
+  test('12: exact-shape backward compatibility — contractAttemptCount is a genuinely absent own property when occurrenceCount === 1', () => {
+    const contract = contractOf('あ', [tok('あ')]);
+    const full = `${markedFence(contract)}\n\n### 原句\nprose`;
+    const sep = separateReadingContract(full);
+    expect('contractAttemptCount' in sep).toBe(false);
+    expect(Object.keys(sep).sort()).toEqual(['contractIssues', 'hadContract', 'markdown', 'readingContract'].sort());
+  });
+});
