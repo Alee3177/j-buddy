@@ -424,4 +424,78 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(nextHeading.startsWith("### 原句")).toBe(true);
     });
   });
+
+  describe("Phase P1-A: grammar/vocabulary selection quality", () => {
+    it("1: the plain/basic case-particle carve-out remains present, unweakened", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("基本格助詞不得升格為文法點");
+      expect(SYSTEM_PROMPT_V2).toMatch(/に／を／が／で／へ/);
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "不要僅因為出現「に／を／が／で／へ」等基本格助詞的一般格位標記用法，就替它建立獨立的文法點"
+      );
+    });
+
+    it("2: clarifies the carve-out applies only to plain case-marking uses, not independently-teachable compounds", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("這項淘汰僅適用於純粹的格位標記用法");
+      expect(SYSTEM_PROMPT_V2).toContain("が作為單純的主語標記");
+      expect(SYSTEM_PROMPT_V2).toContain("で作為單純的地點／工具／方式標記");
+      expect(SYSTEM_PROMPT_V2).toMatch(/不得僅因表面包含「が」或「で」就自動被淘汰/);
+    });
+
+    it("3: contrastive が, では, and でも are named as examples that must not be auto-demoted", () => {
+      const clarification = SYSTEM_PROMPT_V2.split("這項淘汰僅適用於純粹的格位標記用法")[1] ?? "";
+      expect(clarification).toContain("〜が作為轉折／讓步的子句連接詞（逆接）");
+      expect(clarification).toContain("では作為主題化／對比化的複合表現");
+      expect(clarification).toContain("でも作為讓步、舉極端例，或其他獨立複合用法");
+      // framed as illustrative examples eligible when they carry teaching value —
+      // not a mandatory whitelist that must always appear.
+      expect(SYSTEM_PROMPT_V2).toContain("這不代表這些用法一定要出現");
+      expect(SYSTEM_PROMPT_V2).toMatch(/若原句中沒有這類用法.*就不要為了湊數而勉強列出/);
+    });
+
+    it("4: no minimum grammar count is reintroduced — 0 remains a valid answer", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/0\s*[〜~-]\s*5/);
+      expect(SYSTEM_PROMPT_V2).toContain("0 個也是有效的答案");
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/找出\s*1\s*[〜~-]\s*5/);
+    });
+
+    it("5: anti-quota-fill wording remains intact", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("不要為了湊數把搭配、基本助詞用法或詞組硬塞進文法分析");
+      expect(SYSTEM_PROMPT_V2).toContain("只納入實際出現在【分析対象】中、真正具有學習價值的文法");
+      // the new priority principle explicitly disclaims slot-filling too
+      expect(SYSTEM_PROMPT_V2).toContain("不得用來湊滿或填滿文法點數量");
+    });
+
+    it("6: no JLPT forcing/labels return", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("標題不需要、也不應該標注 JLPT 等級（N1〜N5）");
+      expect(SYSTEM_PROMPT_V2).not.toContain("JLPT N1,N2,N3 優先");
+      expect(SYSTEM_PROMPT_V2).not.toContain("「文法點 + JLPT 等級」");
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/找出\s*1\s*[〜~-]\s*5\s*個\s*N1,\s*N2,\s*N3\s*文法點/);
+    });
+
+    it("7: a grammar-candidate priority principle is present, and explicitly is not a slot-filling license", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("候選文法點之間的優先順序");
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "優先選擇對理解【分析対象】具有結構關鍵性、屬於核心語法的高價值文法，其次才是次要或附帶性的文法現象"
+      );
+      expect(SYSTEM_PROMPT_V2).toMatch(/此優先順序僅用於在合格候選之間做取捨，不得用來湊滿或填滿文法點數量/);
+      expect(SYSTEM_PROMPT_V2).toContain("也不影響 0〜5 個的彈性範圍");
+    });
+
+    it("8: a vocabulary item already touched in grammar/collocation analysis is not automatically excluded from vocab", () => {
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "單字若同時在文法分析或搭配分析中被提及，不代表應被排除於單字分析之外"
+      );
+      expect(SYSTEM_PROMPT_V2).toContain("只要該詞本身仍獨立符合上述高價值標準，仍可同時列為單字條目");
+      // not a forced-duplication rule, and the ≤4 cap is untouched
+      expect(SYSTEM_PROMPT_V2).toContain("不必因此重複列出，也不強制一定要列出");
+      expect(SYSTEM_PROMPT_V2).toMatch(/最多\s*4\s*個高價值詞/);
+    });
+
+    it("9: P0-C1 Reading Contract first/marker behavior is unaffected by the P1-A wording changes", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("必須是整個回應的第一個區塊");
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_START -->");
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_END -->");
+      expect(SYSTEM_PROMPT_V2).toMatch(/1\.\s*（最先）讀音契約/);
+    });
+  });
 });
