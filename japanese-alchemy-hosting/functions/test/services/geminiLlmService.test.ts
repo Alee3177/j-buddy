@@ -99,7 +99,7 @@ describe("GeminiLlmService", () => {
             ],
             model: "test-model",
             temperature: 0.1,
-            max_tokens: 8192,
+            max_tokens: 16384,
             extra_body: {
               google: {
                 thinking_config: {
@@ -239,7 +239,7 @@ describe("GeminiLlmService", () => {
       const streamPayload = JSON.parse(mockFetch.mock.calls[0][1].body);
 
       expect(batchPayload.max_tokens).toBe(streamPayload.max_tokens);
-      expect(batchPayload.max_tokens).toBe(8192);
+      expect(batchPayload.max_tokens).toBe(16384);
       expect(batchPayload.extra_body).toEqual(streamPayload.extra_body);
       expect(batchPayload.extra_body.google.thinking_config).toEqual({
         thinking_budget: 512,

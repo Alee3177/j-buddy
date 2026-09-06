@@ -7,7 +7,7 @@ import { LlmBatchCompletion, LlmService, LlmStreamCompletion } from "./llmServic
 // (streamCompletion) requests. Kept identical across both so Tier-2/batch
 // evaluation reflects the same Gemini behavior as the production streaming
 // path used by the Chrome extension.
-const GEMINI_MAX_TOKENS = 8192;
+const GEMINI_MAX_TOKENS = 16384;
 const GEMINI_THINKING_BUDGET = 512; // Specific token limit (0 to 24,576)
 const GEMINI_INCLUDE_THOUGHTS = false; // Returns model's reasoning steps
 
