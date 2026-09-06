@@ -10,6 +10,10 @@ import { LlmBatchCompletion, LlmService, LlmStreamCompletion } from "./llmServic
 const GEMINI_MAX_TOKENS = 16384;
 const GEMINI_THINKING_BUDGET = 512; // Specific token limit (0 to 24,576)
 const GEMINI_INCLUDE_THOUGHTS = false; // Returns model's reasoning steps
+// P1-C1 diagnostic (not yet an approved production behavior change): greedy
+// decoding, to isolate whether unstable grammar/vocab selection across
+// samples is sampling-driven or a stable model preference either way.
+const GEMINI_TEMPERATURE = 0;
 
 function geminiThinkingConfig() {
   return {
@@ -47,7 +51,7 @@ export class GeminiLlmService implements LlmService {
     const payload: LlmRequest = {
       messages,
       model: this.model,
-      temperature: 0.1,
+      temperature: GEMINI_TEMPERATURE,
       max_tokens: GEMINI_MAX_TOKENS,
       stream: true,
       stream_options: { include_usage: true },
@@ -93,7 +97,7 @@ export class GeminiLlmService implements LlmService {
     const payload: LlmRequest = {
       messages,
       model: this.model,
-      temperature: 0.1,
+      temperature: GEMINI_TEMPERATURE,
       max_tokens: GEMINI_MAX_TOKENS,
       extra_body: geminiThinkingConfig(),
     };

@@ -98,7 +98,7 @@ describe("GeminiLlmService", () => {
               { role: "user", content: mockContent },
             ],
             model: "test-model",
-            temperature: 0.1,
+            temperature: 0,
             max_tokens: 16384,
             extra_body: {
               google: {
@@ -217,6 +217,15 @@ describe("GeminiLlmService", () => {
         include_thoughts: false,
       });
     });
+
+    it("P1-C1 diagnostic: requests temperature 0 (greedy decoding)", async () => {
+      mockFetch.mockResolvedValue({ ok: true });
+
+      await service.streamCompletion(mockSystemPrompt, mockContent);
+
+      const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(payload.temperature).toBe(0);
+    });
   });
 
   describe("generation policy parity (P0-0)", () => {
@@ -242,6 +251,39 @@ describe("GeminiLlmService", () => {
       expect(batchPayload.max_tokens).toBe(16384);
       expect(batchPayload.extra_body).toEqual(streamPayload.extra_body);
       expect(batchPayload.extra_body.google.thinking_config).toEqual({
+        thinking_budget: 512,
+        include_thoughts: false,
+      });
+    });
+
+    // P1-C1 diagnostic: temperature was previously untested for equality
+    // between the two methods (only chatCompletion's exact-payload test
+    // pinned a literal value) — a real gap that would have let the two
+    // methods silently drift apart. Closed here alongside the existing
+    // max_tokens/thinking_config parity checks.
+    it("P1-C1: chatCompletion and streamCompletion send the same temperature, and it is 0", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => mockResponse });
+      await service.chatCompletion(mockSystemPrompt, mockContent);
+      const batchPayload = JSON.parse(mockFetch.mock.calls[0][1].body);
+
+      mockFetch.mockClear();
+      mockFetch.mockResolvedValueOnce({ ok: true });
+      await service.streamCompletion(mockSystemPrompt, mockContent);
+      const streamPayload = JSON.parse(mockFetch.mock.calls[0][1].body);
+
+      expect(batchPayload.temperature).toBe(streamPayload.temperature);
+      expect(batchPayload.temperature).toBe(0);
+      expect(streamPayload.temperature).toBe(0);
+
+      // Confirm nothing else in the shared generation policy moved alongside
+      // the temperature change.
+      expect(batchPayload.max_tokens).toBe(16384);
+      expect(streamPayload.max_tokens).toBe(16384);
+      expect(batchPayload.extra_body.google.thinking_config).toEqual({
+        thinking_budget: 512,
+        include_thoughts: false,
+      });
+      expect(streamPayload.extra_body.google.thinking_config).toEqual({
         thinking_budget: 512,
         include_thoughts: false,
       });
