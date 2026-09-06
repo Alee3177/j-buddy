@@ -498,4 +498,99 @@ describe("SYSTEM_PROMPT_V2", () => {
       expect(SYSTEM_PROMPT_V2).toMatch(/1\.\s*（最先）讀音契約/);
     });
   });
+
+  describe("Phase P1-B: silent candidate-first grammar/vocabulary selection", () => {
+    it("1: the grammar candidate-first scan instruction is present", () => {
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "在決定最終文法點之前，先在心裡盤點【分析対象】中所有結構上獨立、真正可教的文法候選"
+      );
+    });
+
+    it("2: the vocabulary candidate-first scan instruction is present", () => {
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "在決定最終單字名單之前，先在心裡盤點【分析対象】中所有可能符合高價值標準的單字候選"
+      );
+    });
+
+    it("3: both scans explicitly forbid appearing in the response, in any form", () => {
+      const occurrences = SYSTEM_PROMPT_V2.split("不得以任何形式出現在回應中").length - 1;
+      expect(occurrences).toBe(2);
+    });
+
+    it("4: the grammar scan explicitly protects a candidate nested inside a broader expression", () => {
+      const grammarScan = SYSTEM_PROMPT_V2.split("在決定最終文法點之前")[1]?.split("從文句中找出")[0] ?? "";
+      expect(grammarScan).toContain("即使某個候選可能落在另一個較大表達的說明範圍內");
+      expect(grammarScan).toContain(
+        "只要它本身具有獨立的接續形式與功能"
+      );
+      expect(grammarScan).toContain("不得只因為已被較大表達提及就略過盤點");
+      // the illustrative example ties directly to the P1-A carve-out's own
+      // examples (passive/honorific expressions vs. a separate contrastive or
+      // topicalizing particle compound) — the exact failure pattern P1-A alone
+      // did not resolve.
+      expect(grammarScan).toContain("句子同時包含被動或敬語表現與另一個轉折助詞、主題化複合助詞等");
+    });
+
+    it("5: the vocab scan explicitly includes items already mentioned in grammar/collocation analysis", () => {
+      const vocabScan = SYSTEM_PROMPT_V2.split("在決定最終單字名單之前")[1]?.split("可包含動詞")[0] ?? "";
+      expect(vocabScan).toContain("包括已經在文法分析或搭配分析中被提及、但本身仍可能獨立成立的詞彙");
+    });
+
+    it("6: every P1-A rule remains present and unchanged", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("基本格助詞不得升格為文法點");
+      expect(SYSTEM_PROMPT_V2).toContain("這項淘汰僅適用於純粹的格位標記用法");
+      expect(SYSTEM_PROMPT_V2).toContain("〜が作為轉折／讓步的子句連接詞（逆接）");
+      expect(SYSTEM_PROMPT_V2).toContain("では作為主題化／對比化的複合表現");
+      expect(SYSTEM_PROMPT_V2).toContain("でも作為讓步、舉極端例，或其他獨立複合用法");
+      expect(SYSTEM_PROMPT_V2).toContain("候選文法點之間的優先順序");
+      expect(SYSTEM_PROMPT_V2).toContain(
+        "單字若同時在文法分析或搭配分析中被提及，不代表應被排除於單字分析之外"
+      );
+    });
+
+    it("7: 0-5 grammar, 0-is-valid, and anti-quota-fill wording remain", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/0\s*[〜~-]\s*5/);
+      expect(SYSTEM_PROMPT_V2).toContain("0 個也是有效的答案");
+      expect(SYSTEM_PROMPT_V2).toContain("不要為了湊數把搭配、基本助詞用法或詞組硬塞進文法分析");
+      expect(SYSTEM_PROMPT_V2).not.toMatch(/找出\s*1\s*[〜~-]\s*5/);
+    });
+
+    it("8: the ≤4 vocabulary cap remains", () => {
+      expect(SYSTEM_PROMPT_V2).toMatch(/最多\s*4\s*個高價值詞/);
+    });
+
+    it("9: no JLPT forcing returns", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("標題不需要、也不應該標注 JLPT 等級（N1〜N5）");
+      expect(SYSTEM_PROMPT_V2).not.toContain("JLPT N1,N2,N3 優先");
+      expect(SYSTEM_PROMPT_V2).not.toContain("「文法點 + JLPT 等級」");
+    });
+
+    it("10: P0-C1 Reading Contract first/marker/order behavior is unchanged", () => {
+      expect(SYSTEM_PROMPT_V2).toContain("必須是整個回應的第一個區塊");
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_START -->");
+      expect(SYSTEM_PROMPT_V2).toContain("<!-- READING_CONTRACT_END -->");
+      expect(SYSTEM_PROMPT_V2).toMatch(/1\.\s*（最先）讀音契約/);
+      const order = ["### 原句", "### 單字分析", "### 文法分析", "### 搭配分析", "### 語體／新聞表現"];
+      const exampleSection = SYSTEM_PROMPT_V2.slice(SYSTEM_PROMPT_V2.indexOf("# 以下為示例與格式"));
+      let cursor = -1;
+      for (const heading of order) {
+        const at = exampleSection.indexOf(heading, cursor + 1);
+        expect(at).toBeGreaterThan(cursor);
+        cursor = at;
+      }
+    });
+
+    it("11: no visible candidate-list section was added — heading set is unchanged", () => {
+      // Guards against the enumeration step accidentally growing into a new
+      // output section (explicitly out of scope for P1-B).
+      const headings = SYSTEM_PROMPT_V2.match(/^###\s+\S+/gm) ?? [];
+      const uniqueHeadings = Array.from(new Set(headings.map((h) => h.replace(/^###\s+/, ""))));
+      expect(uniqueHeadings.sort()).toEqual(
+        ["原句", "單字分析", "文法分析", "搭配分析", "語體／新聞表現"].sort()
+      );
+      expect(SYSTEM_PROMPT_V2).not.toContain("候選清單");
+      expect(SYSTEM_PROMPT_V2).not.toContain("### 文法候選");
+      expect(SYSTEM_PROMPT_V2).not.toContain("### 單字候選");
+    });
+  });
 });
