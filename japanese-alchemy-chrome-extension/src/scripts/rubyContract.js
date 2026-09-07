@@ -36,6 +36,12 @@
 const RE_KANJI = /\p{Script=Han}/u;
 const RE_KANA = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const RE_DIGIT = /[0-9０-９]/;
+// R1: ASCII Latin letters or ASCII digits inside a reading. Deliberately
+// narrow — full-width digits/letters, katakana, ー, and ・ are all legitimate
+// in an existing reading (e.g. `{ＡＩ|エーアイ}`, `{漢字・仮名|かんじ・かな}`)
+// and are NOT flagged; only half-width ASCII a-z/A-Z/0-9 are, since no
+// legitimate reading in this codebase's fixtures/tests ever contains one.
+const RE_READING_ASCII_CONTAMINATION = /[A-Za-z0-9]/;
 // Non-kana, non-Han glyphs that still legitimately appear inside a compound
 // ruby base: iteration marks, small-ke counter forms, the nakaguro compound
 // separator (existing `{漢字・仮名|…}` behaviour), chōonpu, and the
@@ -68,6 +74,16 @@ export const ISSUE_CODES = Object.freeze({
   NON_KANJI_BASE: 'NON_KANJI_BASE',
   DUPLICATE_ADJACENT_SURFACE: 'DUPLICATE_ADJACENT_SURFACE',
   SUSPECT_COUNTER_READING: 'SUSPECT_COUNTER_READING',
+  // R1: an ASCII Latin letter or ASCII digit inside a non-empty reading
+  // (e.g. `{改善点|かいぜnてん}`, `{歴史的|れきshiてき}`) — a reproduced,
+  // production-visible model defect. Never a legitimate reading: every
+  // existing fixture/test reading is pure hiragana/katakana, optionally with
+  // ー or ・ (see rubyContract R1 audit); ASCII contamination is always
+  // unambiguous corruption, never a stylistic or dialectal choice. Detection
+  // is narrow by design — this does not validate that a reading is *correct*
+  // kana for its kanji (that remains out of scope, see the P2-C policy),
+  // only that it is not Latin-contaminated.
+  READING_ASCII_CONTAMINATION: 'READING_ASCII_CONTAMINATION',
 });
 
 const SEVERITY = Object.freeze({
@@ -83,12 +99,19 @@ const SEVERITY = Object.freeze({
   NON_KANJI_BASE: 'warning',
   DUPLICATE_ADJACENT_SURFACE: 'warning',
   SUSPECT_COUNTER_READING: 'warning',
+  // 'warning' (not 'error'), matching DUPLICATE_ADJACENT_SURFACE: both are
+  // auto-repaired unambiguously below, so `ok` is reserved for issues that
+  // can't be safely resolved without guessing.
+  READING_ASCII_CONTAMINATION: 'warning',
 });
 
 // Codes whose default `repairable` flag is true. DUPLICATE_ADJACENT_SURFACE is
 // resolved per-occurrence (only when its left boundary is safe), so it is not
 // listed here and is stamped explicitly during validation.
-const DEFAULT_REPAIRABLE = new Set();
+// READING_ASCII_CONTAMINATION has no such ambiguity — stripping a
+// Latin-contaminated reading down to its (untouched) base is always safe
+// regardless of context, so it defaults to repairable here.
+const DEFAULT_REPAIRABLE = new Set([ISSUE_CODES.READING_ASCII_CONTAMINATION]);
 
 /**
  * @typedef {Object} Token
@@ -284,6 +307,15 @@ export function validateRuby(text) {
     if (cls === 'KANA_ONLY_BASE') add(ISSUE_CODES.KANA_ONLY_BASE, t.start, t.raw);
     else if (cls === 'NON_KANJI_BASE') add(ISSUE_CODES.NON_KANJI_BASE, t.start, t.raw);
 
+    // R1: reject ASCII Latin/digit contamination inside the reading itself
+    // (e.g. `{改善点|かいぜnてん}`) — a reproduced, production-visible model
+    // defect (see the v0.3 close-batch evidence). Narrow and deterministic:
+    // no phonetic correction, no guessing n -> ん, just detection here;
+    // `repairRuby` strips the whole annotation down to `t.base` below.
+    if (RE_READING_ASCII_CONTAMINATION.test(t.reading)) {
+      add(ISSUE_CODES.READING_ASCII_CONTAMINATION, t.start, t.raw);
+    }
+
     // Duplicated adjacent surface: the plain text immediately before the token
     // is byte-for-byte the token base. Detected broadly; only marked repairable
     // when the left boundary guarantees the removal is unambiguous.
@@ -314,13 +346,19 @@ export function validateRuby(text) {
 // --- repair --------------------------------------------------------------
 
 /**
- * Apply the Phase 1A conservative repairs to `text`.
+ * Apply the conservative repairs to `text`.
  *
- * Currently repairs exactly one class: DUPLICATE_ADJACENT_SURFACE occurrences
- * whose left boundary is safe (`repairable: true`). The duplicated plain-text
- * copy of the following token's base is deleted. Everything else — missing
- * braces, extra pipes, empty sides, suspect readings, non-kanji bases — is
- * reported in `remainingIssues` and left untouched.
+ * Repairs exactly two unambiguous classes:
+ *   - DUPLICATE_ADJACENT_SURFACE occurrences whose left boundary is safe
+ *     (`repairable: true`): the duplicated plain-text copy of the following
+ *     token's base is deleted.
+ *   - READING_ASCII_CONTAMINATION (R1): the whole `{base|reading}` token is
+ *     demoted to plain `base` — the reading annotation is discarded, never
+ *     phonetically corrected or guessed (no n -> ん), and the base source
+ *     characters are never touched.
+ * Everything else — missing braces, extra pipes, empty sides, suspect
+ * readings, non-kanji bases — is reported in `remainingIssues` and left
+ * untouched.
  *
  * Pure and total: never throws. Idempotent — running it on its own output makes
  * no further change.
@@ -332,23 +370,38 @@ export function repairRuby(text) {
   const src = typeof text === 'string' ? text : '';
   const { issues } = validateRuby(src);
 
-  const repairableDups = issues
-    .filter((i) => i.code === ISSUE_CODES.DUPLICATE_ADJACENT_SURFACE && i.repairable)
+  const repairableIssues = issues
+    .filter((i) => i.repairable
+      && (i.code === ISSUE_CODES.DUPLICATE_ADJACENT_SURFACE || i.code === ISSUE_CODES.READING_ASCII_CONTAMINATION))
     .sort((a, b) => b.index - a.index); // right-to-left keeps earlier indices valid
 
-  if (repairableDups.length === 0) {
+  if (repairableIssues.length === 0) {
     return { text: src, changed: false, repairs: [], remainingIssues: issues };
   }
 
   let out = src;
   const repairs = [];
-  for (const issue of repairableDups) {
-    const braceAt = issue.raw.indexOf('{');
-    const surface = braceAt === -1 ? '' : issue.raw.slice(0, braceAt);
-    if (!surface) continue;
-    if (out.slice(issue.index, issue.index + surface.length) !== surface) continue;
-    out = out.slice(0, issue.index) + out.slice(issue.index + surface.length);
-    repairs.push({ code: issue.code, index: issue.index, removed: surface });
+  for (const issue of repairableIssues) {
+    if (issue.code === ISSUE_CODES.DUPLICATE_ADJACENT_SURFACE) {
+      const braceAt = issue.raw.indexOf('{');
+      const surface = braceAt === -1 ? '' : issue.raw.slice(0, braceAt);
+      if (!surface) continue;
+      if (out.slice(issue.index, issue.index + surface.length) !== surface) continue;
+      out = out.slice(0, issue.index) + out.slice(issue.index + surface.length);
+      repairs.push({ code: issue.code, index: issue.index, removed: surface });
+    } else if (issue.code === ISSUE_CODES.READING_ASCII_CONTAMINATION) {
+      // issue.raw is the full `{base|reading}` token (see the `add(...,
+      // t.start, t.raw)` call above); re-derive `base` from it rather than
+      // trusting any external state, and only apply when the source text at
+      // this index still literally matches (defensive against upstream
+      // changes between validation and repair).
+      const match = /^\{([^{}|]+)\|[^{}]*\}$/.exec(issue.raw);
+      if (!match) continue;
+      const base = match[1];
+      if (out.slice(issue.index, issue.index + issue.raw.length) !== issue.raw) continue;
+      out = out.slice(0, issue.index) + base + out.slice(issue.index + issue.raw.length);
+      repairs.push({ code: issue.code, index: issue.index, removed: issue.raw, replacedWith: base });
+    }
   }
 
   const changed = out !== src;
@@ -566,6 +619,18 @@ function validateContractJsonText(jsonText) {
     if (!readingOk) {
       return fail(RC.READING_CONTRACT_INVALID_READING,
         `tokens[${i}].reading must be a non-empty kana string or null.`, i);
+    }
+    // R1: apply the SAME narrow ASCII-contamination rule used by validateRuby
+    // to Reading Contract tokens — a token such as
+    // { "text": "改善点", "reading": "かいぜnてん" } must never make it into a
+    // structurally "ok" contract, since persistence trusts a valid contract's
+    // readings verbatim (see reconcileRuby / structured_json.reading). This
+    // reuses the existing READING_CONTRACT_INVALID_READING code rather than
+    // adding a new one — an ASCII-contaminated reading is just another way to
+    // fail "must be a non-empty kana string".
+    if (typeof reading === 'string' && RE_READING_ASCII_CONTAMINATION.test(reading)) {
+      return fail(RC.READING_CONTRACT_INVALID_READING,
+        `tokens[${i}].reading must be a kana string with no ASCII Latin/digit contamination.`, i);
     }
     tokens.push({ text, reading: reading === null ? null : reading });
   }

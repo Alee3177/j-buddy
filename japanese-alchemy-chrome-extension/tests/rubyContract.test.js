@@ -172,6 +172,79 @@ describe('rubyContract.validateRuby — known production failures', () => {
     expect(repaired.text).toContain('{日|にち}'); // にち NOT changed to みっか
   });
 
+  test('E: ASCII Latin contamination inside a reading is invalid and auto-demoted to plain base', () => {
+    // Reproduced twice in real Gemini Tier-2 evidence — the v0.3 close-batch defect.
+    const text = '{改善点|かいぜnてん}を{示|しめ}す。';
+    const result = validateRuby(text);
+
+    expect(codes(result)).toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    const issue = result.issues.find((i) => i.code === ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(issue.severity).toBe('warning');
+    expect(issue.repairable).toBe(true);
+    expect(issue.index).toBe(text.indexOf('{改善点'));
+    // Structurally the token still tokenizes fine — this is a reading-content
+    // defect, not a brace/pipe defect.
+    expect(result.tokens[0]).toMatchObject({ valid: true, base: '改善点', reading: 'かいぜnてん' });
+
+    const repaired = repairRuby(text);
+    expect(repaired.changed).toBe(true);
+    // The base source characters (改善点) are preserved exactly; only the
+    // untrustworthy reading annotation is discarded. Never n -> ん guessing.
+    expect(repaired.text).toBe('改善点を{示|しめ}す。');
+    expect(repaired.text).not.toContain('かいぜnてん');
+    expect(repaired.text).not.toContain('かいぜんてん'); // no invented correction either
+    expect(repaired.repairs).toEqual([
+      { code: ISSUE_CODES.READING_ASCII_CONTAMINATION, index: text.indexOf('{改善点'), removed: '{改善点|かいぜnてん}', replacedWith: '改善点' },
+    ]);
+    expect(repaired.remainingIssues).toEqual([]);
+    expect(repairRuby(repaired.text)).toMatchObject({ changed: false }); // idempotent
+  });
+
+  test('F: ASCII contamination mid-reading (歴史的|れきshiてき) is invalid', () => {
+    const text = '{歴史的|れきshiてき}景観';
+    const result = validateRuby(text);
+    expect(codes(result)).toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(repairRuby(text).text).toBe('歴史的景観');
+  });
+
+  test('G: a reading that is only Latin letters (abc) is invalid', () => {
+    const text = '{漢字|abc}';
+    expect(codes(validateRuby(text))).toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(repairRuby(text).text).toBe('漢字');
+  });
+
+  test('H: ASCII digit contamination inside a reading is invalid', () => {
+    const text = '{改善点|かいぜ1てん}';
+    const result = validateRuby(text);
+    expect(codes(result)).toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(repairRuby(text).text).toBe('改善点');
+  });
+
+  test('I: normal hiragana readings remain valid (no false positives)', () => {
+    for (const text of ['{漢字|かんじ}', '{改善点|かいぜんてん}', '{歴史的|れきしてき}']) {
+      expect(codes(validateRuby(text))).not.toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+      expect(repairRuby(text).changed).toBe(false);
+    }
+  });
+
+  test('J: a legitimate katakana reading remains valid (e.g. {ＡＩ|エーアイ})', () => {
+    const text = '{ＡＩ|エーアイ}';
+    expect(codes(validateRuby(text))).not.toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(repairRuby(text).changed).toBe(false);
+  });
+
+  test('K: a reading containing the prolonged sound mark ー remains valid', () => {
+    const text = '{ＡＩ|エーアイ}'; // ー appears inside this real fixture reading
+    expect(validateRuby(text).tokens[0].reading).toContain('ー');
+    expect(codes(validateRuby(text))).not.toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+  });
+
+  test('L: a reading containing the nakaguro ・ remains valid (e.g. {漢字・仮名|かんじ・かな})', () => {
+    const text = '{漢字・仮名|かんじ・かな}';
+    expect(codes(validateRuby(text))).not.toContain(ISSUE_CODES.READING_ASCII_CONTAMINATION);
+    expect(repairRuby(text).changed).toBe(false);
+  });
+
   test.each([
     ['1日 → ついたち in a date context', '1{日|にち}に'],
     ['2日', '2{日|にち}に'],
@@ -500,6 +573,29 @@ describe('rubyContract.parseReadingContract — structural validation', () => {
       contractOf('日', [{ text: '日', reading: '' }]),
     ));
     expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_READING]);
+  });
+
+  test('R1: an ASCII-contaminated reading ({"text":"改善点","reading":"かいぜnてん"}) invalidates the contract', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('改善点', [{ text: '改善点', reading: 'かいぜnてん' }]),
+    ));
+    expect(r.ok).toBe(false);
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_READING]);
+    expect(r.contract).toBeNull();
+  });
+
+  test('R1: ASCII digit contamination in a contract reading is also rejected', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('改善点', [{ text: '改善点', reading: 'かいぜ1てん' }]),
+    ));
+    expect(rcCodes(r)).toEqual([RC.READING_CONTRACT_INVALID_READING]);
+  });
+
+  test('R1: a legitimate katakana contract reading (ＡＩ → エーアイ) is unaffected', () => {
+    const r = parseReadingContract(asFinalJsonBlock(
+      contractOf('ＡＩ', [{ text: 'ＡＩ', reading: 'エーアイ' }]),
+    ));
+    expect(r.ok).toBe(true);
   });
 
   test('shape errors: non-object top level, missing source_text, tokens not an array', () => {
@@ -1231,6 +1327,65 @@ describe('rubyContract.reconcileRuby — readingTrusted (P2-B)', () => {
     expect(separated.readingContract).toBeNull(); // the last attempt is invalid — no fallback to the earlier valid one
     const r = reconcileRuby(separated.markdown, separated.readingContract, '3日以降');
     expect(r.readingTrusted).toBe(false);
+  });
+
+  // --- R1: ASCII-contamination trust interaction --------------------------
+
+  test('R1-D1: invalid inline reading on 原句 + a VALID trusted contract → the trusted contract reading wins', () => {
+    const c = contract('改善点', [tk('改善点', 'かいぜんてん')]);
+    const md = '### 原句\n- {改善点|かいぜnてん}'; // model's own inline ruby is ASCII-contaminated
+    const r = reconcileRuby(md, c, '改善点');
+    expect(r.readingTrusted).toBe(true);
+    expect(r.changed).toBe(true);
+    expect(r.text).toContain('{改善点|かいぜんてん}');
+    expect(r.text).not.toContain('かいぜnてん');
+  });
+
+  test('R1-D2: invalid inline reading + a contaminated (invalid) contract → readingTrusted: false, fails closed to plain base text', () => {
+    const full = [
+      READING_CONTRACT_MARKER.START,
+      '```json',
+      JSON.stringify({
+        reading_contract_version: 1,
+        source_text: '改善点',
+        tokens: [{ text: '改善点', reading: 'かいぜnてん' }],
+      }),
+      '```',
+      READING_CONTRACT_MARKER.END,
+      '',
+      '### 原句',
+      '- {改善点|かいぜnてん}',
+    ].join('\n');
+    const separated = separateReadingContract(full);
+    // The contract itself is invalidated by ASCII contamination (R1) — never
+    // reaches reconcileRuby as a usable object.
+    expect(separated.readingContract).toBeNull();
+
+    const reconciled = reconcileRuby(separated.markdown, separated.readingContract, '改善点');
+    expect(reconciled.readingTrusted).toBe(false);
+
+    // Mirrors sidepanel.js's exact persistence gate — a contaminated contract
+    // can never be persisted as a trusted reading, because readingContract is
+    // null and readingTrusted is false simultaneously.
+    const persistedReading = reconciled.readingTrusted
+      ? { version: 1, source_text: separated.readingContract?.sourceText, tokens: separated.readingContract?.tokens }
+      : null;
+    expect(persistedReading).toBeNull();
+
+    // reconcileRuby alone leaves the (base-correct) inline ruby untouched —
+    // repairRuby, run next in the production pipeline, is what strips the bad
+    // reading, demoting to plain base text with the source characters intact.
+    const finalText = repairRuby(reconciled.text).text;
+    expect(finalText).toContain('改善点');
+    expect(finalText).not.toContain('かいぜnてん');
+    expect(finalText).not.toContain('かいぜんてん'); // still no invented correction
+  });
+
+  test('R1: base source characters are always byte-exact across the whole reconcile+repair pipeline', () => {
+    const md = '### 原句\n- {改善点|かいぜnてん}を{示|しめ}す。';
+    const reconciled = reconcileRuby(md, null, '改善点を示す。');
+    const finalText = repairRuby(reconciled.text).text;
+    expect(stripRubyMarkup(finalText)).toBe('### 原句\n- 改善点を示す。'); // no character ever added, dropped, or substituted
   });
 });
 
