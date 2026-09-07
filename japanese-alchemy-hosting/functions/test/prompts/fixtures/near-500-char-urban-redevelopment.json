@@ -23,6 +23,9 @@
       "reading": "れきしてきけいかん"
     }
   ],
+  "grammarAliases": {
+    "〜つつも（N1）": ["つつ"]
+  },
   "expectedSections": [
     "原句",
     "單字分析",

@@ -45,6 +45,15 @@ export interface Fixture {
   targetVersions: PromptVersion[];
   structuralChecks: StructuralCheck[];
   expectedReadings?: ExpectedReading[];
+  /**
+   * P3-B: TEST/HARNESS-only escape hatch for a legitimate heading paraphrase
+   * the canonical-core reduction can't safely auto-normalize (e.g. the model
+   * writing an optional suffix parenthetically — `〜ながら（も）` — instead of
+   * fused — `〜ながらも`). Keyed by the exact `expectedGrammar` string; each
+   * value is a list of additional accepted canonical cores. Never a
+   * substitute for a real heading match — see `grammarCanonicalCore`.
+   */
+  grammarAliases?: Record<string, string[]>;
 }
 
 export interface CheckResult {
@@ -126,13 +135,86 @@ function vocabCore(term: string): string {
   return term.replace(/[（(].*$/, "").trim();
 }
 
-/** Extract the pattern core from an expectedGrammar entry: "〜前に（N3）" -> "前に". */
-function grammarCore(g: string): string {
-  return g
-    .replace(/^.*<文法>/, "")
-    .replace(/[（(].*$/, "")
-    .replace(/^〜+/, "")
-    .trim();
+// --- P3-B: canonical grammar-heading matching -------------------------------
+//
+// See the P3-B audit: matching an expected grammar pattern against WHOLE
+// 文法分析 prose (rather than the model's own headings) let unrelated example
+// text silently "cover" a completely different taught point — most severely
+// when the reduced anchor was a single hiragana particle (`が`), which is
+// close to certain to appear somewhere in ANY natural Japanese explanation.
+//
+// This section is heading-scoped, exact-equality, deterministic, and
+// fixture-driven — no dictionary, no morphology, no fuzzy matching:
+//   1. `grammarCanonicalCore` reduces a raw label (expected OR a response's
+//      own `#### <文法>` heading) to one canonical key. It strips ONLY
+//      trailing JLPT-level metadata (（N3）, （JLPT N2）, ...) and a leading
+//      〜 run — never blanket "everything after the first paren". Remaining
+//      non-JLPT parenthetical content (a sense gloss like （逆接）, an
+//      optional-suffix marker like （も）) is KEPT attached whenever the text
+//      before it is a single character — exactly the degenerate case that
+//      let 〜が（逆接） collapse into a bare "が" other が-bearing text could
+//      satisfy by accident, and that would otherwise let 〜が（逆接） and
+//      〜が（主格） collide with each other. When the text before the
+//      parenthetical is already 2+ characters (受身形, 一方, ながら, つつ, …)
+//      — already a safe, specific anchor — the parenthetical is stripped, since
+//      it is almost always the model's own free-form gloss and essentially
+//      never matches the fixture's bracketed label byte-for-byte.
+//   2. `extractGrammarHeadingCores` pulls ONLY the canonical core of every
+//      `#### <文法>` heading the response actually produced — CRLF-safe
+//      (`split(/\r?\n/)`, never a `$`-anchored regex against a line that may
+//      carry a trailing `\r`) — and never looks at body prose.
+//   3. `expandSlashAliases` deterministically splits `〜ても／でも` into
+//      `["ても", "でも"]` (mirrors the convention `grammarHeadingMatchesContent`
+//      already used) so either half alone counts as a match.
+//   4. `grammarExpectationSatisfied` combines both sides' slash-expansions
+//      plus any fixture-declared `grammarAliases` for that exact expected
+//      string, and requires EXACT equality against a produced heading core —
+//      never substring-of-heading, never substring-of-prose.
+
+/** Strip a trailing JLPT-level annotation like （N3）, (N3), （JLPT N2）; repeatable, metadata-only. */
+function stripJlptLevel(s: string): string {
+  const jlptTail = /[（(]\s*(?:JLPT\s*)?N[1-5]\s*[）)]\s*$/;
+  let out = s;
+  while (jlptTail.test(out)) {
+    out = out.replace(jlptTail, "").trim();
+  }
+  return out;
+}
+
+/** Canonical grammar-label core used for exact-equality matching (see section comment above). */
+function grammarCanonicalCore(raw: string): string {
+  let s = raw.replace(/^.*<文法>/, "");
+  s = stripJlptLevel(s);
+  s = s.replace(/^〜+/, "").trim();
+  const parenIdx = s.search(/[（(]/);
+  if (parenIdx === -1) return s;
+  const prefix = s.slice(0, parenIdx).trim();
+  return prefix.length > 1 ? prefix : s; // keep a disambiguating gloss attached to a 1-char anchor
+}
+
+/** Deterministic slash-alternative split: "ても／でも" -> ["ても", "でも"]. No fuzzy matching. */
+function expandSlashAliases(core: string): string[] {
+  return core.split(/[／/]/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Every `#### <文法>` heading's canonical core actually produced in the response (CRLF-safe; heading-only, never body prose). */
+function extractGrammarHeadingCores(response: string): string[] {
+  const gs = section(response, "文法分析");
+  return gs
+    .split(/^####\s+/gm)
+    .slice(1)
+    .map((entry) => {
+      const head = entry.split(/\r?\n/)[0] ?? "";
+      return grammarCanonicalCore(stripRuby(head));
+    })
+    .filter(Boolean);
+}
+
+/** Does any produced heading core exactly satisfy this one expectedGrammar entry (incl. slash + fixture aliases)? */
+function grammarExpectationSatisfied(expectedRaw: string, headingCores: string[], aliases: string[]): boolean {
+  const expectedCore = grammarCanonicalCore(expectedRaw);
+  const expectedVariants = new Set([expectedCore, ...expandSlashAliases(expectedCore), ...aliases]);
+  return headingCores.some((hc) => expectedVariants.has(hc) || expandSlashAliases(hc).some((h) => expectedVariants.has(h)));
 }
 
 // --- individual checks -------------------------------------------------------
@@ -247,13 +329,20 @@ function grammarHeadingMatchesContent(response: string): CheckResult {
   const gs = section(response, "文法分析");
   const entries = gs.split(/^####\s+/gm).slice(1).map((e) => e.trim()).filter(Boolean);
   for (const entry of entries) {
-    const head = entry.split("\n")[0];
+    // P3-B CRLF fix only (audit item C/F): a Windows checkout (core.autocrlf)
+    // leaves a trailing \r on each line; `.split("\n")` kept it on `head`,
+    // and the old `/[（(].*$/` couldn't bridge across it (`.` excludes `\r`,
+    // and `$` without `/m` only anchors at the true end of string), so the
+    // parenthetical/JLPT suffix silently failed to strip. `/\r?\n/` splitting
+    // plus a `[\s\S]`-based (line-terminator-inclusive) replacement fixes
+    // this without changing the check's existing strictness in any other way.
+    const head = entry.split(/\r?\n/)[0] ?? "";
     const headNorm = stripRuby(head);
-    const core = headNorm.replace(/^.*<文法>/, "").replace(/[（(].*$/, "").replace(/^〜+/, "").trim();
+    const core = headNorm.replace(/^.*<文法>/, "").replace(/[（(][\s\S]*$/, "").replace(/^〜+/, "").trim();
     if (core) {
       // Split slash-alternatives (ても／でも) and accept if any part appears in the body.
       const parts = core.split(/[／/]/).map((s) => s.trim()).filter(Boolean);
-      const bodyNorm = stripRuby(entry.split("\n").slice(1).join("\n"));
+      const bodyNorm = stripRuby(entry.split(/\r?\n/).slice(1).join("\n"));
       const found = parts.some((p) => bodyNorm.includes(p));
       if (!found) {
         return { pass: false, detail: `heading "${core}" not reflected in its body` };
@@ -284,14 +373,18 @@ function expectedVocabularyCovered(response: string, fixture: Fixture): CheckRes
 }
 
 function expectedGrammarCovered(response: string, fixture: Fixture): CheckResult {
-  const gs = stripRuby(section(response, "文法分析"));
+  const headingCores = extractGrammarHeadingCores(response);
   const total = fixture.expectedGrammar.length;
   let covered = 0;
   const missing: string[] = [];
   for (const g of fixture.expectedGrammar) {
-    if (gs.includes(grammarCore(g))) covered++;
+    const aliases = fixture.grammarAliases?.[g] ?? [];
+    if (grammarExpectationSatisfied(g, headingCores, aliases)) covered++;
     else missing.push(g);
   }
+  // P3-B note: this threshold is UNCHANGED — still ≥1-of-N, not all-of-N.
+  // P3-B only makes `covered`/`missing` truthful; the aggregation policy is
+  // reserved for P3-C.
   return { pass: total === 0 || covered >= 1, detail: `${covered}/${total} covered${missing.length ? `; missing: ${missing.join(", ")}` : ""}` };
 }
 
@@ -567,9 +660,11 @@ export function coverage(response: string, fixture: Fixture): {
   grammar: { covered: number; total: number };
 } {
   const ws = stripRuby(section(response, "單字分析"));
-  const gs = stripRuby(section(response, "文法分析"));
+  const headingCores = extractGrammarHeadingCores(response);
   const vocabCovered = fixture.expectedVocabulary.filter((t) => ws.includes(vocabCore(t))).length;
-  const grammarCovered = fixture.expectedGrammar.filter((g) => gs.includes(grammarCore(g))).length;
+  const grammarCovered = fixture.expectedGrammar.filter((g) =>
+    grammarExpectationSatisfied(g, headingCores, fixture.grammarAliases?.[g] ?? [])
+  ).length;
   return {
     vocab: { covered: vocabCovered, total: fixture.expectedVocabulary.length },
     grammar: { covered: grammarCovered, total: fixture.expectedGrammar.length },
