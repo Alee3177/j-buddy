@@ -254,4 +254,88 @@ describe("expectedGrammarCovered (P3-B heading-scoped, exact-equality, alias-awa
       expect(cov.grammar.total).toBe(2);
     }
   });
+
+  // --- P3-B.1: two matcher edge cases found during the P3-C audit ----------
+  //
+  // (A) The 1-char gloss-retention rule built for が（逆接）/が（主格） also
+  //     caught conditional particles と／ば whose fixture-authored label
+  //     carries a purely-documentary gloss the model never reproduces —
+  //     fixed via fixture-declared `grammarAliases`, not by weakening the
+  //     retention rule (which stays load-bearing for が).
+  // (B) A real heading can wrap descriptive content in Japanese corner
+  //     brackets with an inner （...） — 使役受身形「〜させられる（連用中止：
+  //     〜させられ）」 — which used to hijack the reducer via the inner paren.
+
+  it("P3-B.1-1: conditionals real evidence — expected 〜と（恆常條件）（N3） matches heading 〜と（N3）", () => {
+    const fixture = baseFixture({
+      expectedGrammar: ["〜と（恆常條件）（N3）", "〜ば（假定條件）（N3）"],
+      grammarAliases: { "〜と（恆常條件）（N3）": ["と"], "〜ば（假定條件）（N3）": ["ば"] },
+    });
+    const response = wrap(
+      [
+        "#### <文法>〜と（N3）",
+        "- **用法說明**",
+        "  - 恆常條件を表す。",
+        "",
+        "#### <文法>〜ば",
+        "- **用法說明**",
+        "  - 假定條件を表す。",
+      ].join("\n")
+    );
+    const cov = coverage(response, fixture);
+    expect(cov.grammar.covered).toBe(2);
+  });
+
+  it("P3-B.1-2: expected 〜ば（假定條件）（N3） matches bare heading 〜ば via alias", () => {
+    const fixture = baseFixture({
+      expectedGrammar: ["〜ば（假定條件）（N3）"],
+      grammarAliases: { "〜ば（假定條件）（N3）": ["ば"] },
+    });
+    const response = wrap(["#### <文法>〜ば", "- **用法說明**", "  - 假定條件を表す。"].join("\n"));
+    expect(coverage(response, fixture).grammar.covered).toBe(1);
+  });
+
+  it("P3-B.1-3: が（逆接） still does NOT collapse to plain が (retention rule untouched)", () => {
+    const fixture = baseFixture({ expectedGrammar: ["〜が（逆接）（N3）"] });
+    const response = wrap(
+      [
+        "#### <文法>受身形",
+        "- **例句**",
+        "  - {私|わたし}が{採用|さいよう}されました。",
+      ].join("\n")
+    );
+    expect(coverage(response, fixture).grammar.covered).toBe(0);
+  });
+
+  it("P3-B.1-4: が（逆接） and が（主格） remain distinct after the bracket-aware fix", () => {
+    const gyakusetsu = baseFixture({ expectedGrammar: ["〜が（逆接）（N3）"] });
+    const shukaku = baseFixture({ expectedGrammar: ["〜が（主格）（N3）"] });
+    const responseWithShukaku = wrap(
+      ["#### <文法>〜が（主格）", "- **用法說明**", "  - 主語を表す「が」。"].join("\n")
+    );
+    expect(coverage(responseWithShukaku, gyakusetsu).grammar.covered).toBe(0);
+    expect(coverage(responseWithShukaku, shukaku).grammar.covered).toBe(1);
+  });
+
+  it("P3-B.1-5: causative-passive heading with inner （...） inside 「...」 canonicalizes correctly", () => {
+    const fixture = baseFixture({ expectedGrammar: ["使役受身形（〜させられる）（N2）"] });
+    const response = wrap(
+      [
+        "#### <文法>使役受身形「〜させられる（連用中止：〜させられ）」",
+        "- **用法說明**",
+        "  - 使役受身の連用中止形について説明する。",
+      ].join("\n")
+    );
+    expect(coverage(response, fixture).grammar.covered).toBe(1);
+  });
+
+  it("P3-B.1-5b: a （...） strictly inside 「...」 is never mistaken for the outer boundary", () => {
+    // Regression pin for the underlying mechanism, independent of any one
+    // fixture's wording: the inner （中身） must never surface as the core.
+    const fixture = baseFixture({ expectedGrammar: ["外側ラベル（N2）"] });
+    const response = wrap(
+      ["#### <文法>外側ラベル「説明（中身）続き」", "- **用法說明**", "  - 説明。"].join("\n")
+    );
+    expect(coverage(response, fixture).grammar.covered).toBe(1);
+  });
 });

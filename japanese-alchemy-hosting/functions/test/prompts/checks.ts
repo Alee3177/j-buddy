@@ -170,6 +170,22 @@ function vocabCore(term: string): string {
 //      plus any fixture-declared `grammarAliases` for that exact expected
 //      string, and requires EXACT equality against a produced heading core —
 //      never substring-of-heading, never substring-of-prose.
+//
+// P3-B.1 (found during the P3-C audit) fixed two edge cases without touching
+// this design's semantics:
+//   - The 1-char retention rule meant for が（逆接）/が（主格） also caught
+//     conditional particles と／ば whose fixture-authored label carries a
+//     purely-documentary gloss (（恆常條件）/（假定條件）) the model was never
+//     asked to reproduce — fixed via fixture-declared `grammarAliases`
+//     ("と"/"ば"), not by weakening the retention rule itself.
+//   - `findBoundaryIndex` (below) is now bracket-aware: a real heading can
+//     wrap descriptive content in Japanese corner brackets — `使役受身形「〜
+//     させられる（連用中止：〜させられ）」` — and the OLD plain `search(/[（(]/)`
+//     found the INNER （連用中止…） first, hijacking the reducer into a
+//     garbled core. `findBoundaryIndex` tracks `「」` depth so a `（`/`(`
+//     inside a `「...」` span is never treated as the boundary; the `「`
+//     itself becomes the boundary instead, exactly mirroring how a bare
+//     `（...）` gloss is already treated.
 
 /** Strip a trailing JLPT-level annotation like （N3）, (N3), （JLPT N2）; repeatable, metadata-only. */
 function stripJlptLevel(s: string): string {
@@ -181,14 +197,44 @@ function stripJlptLevel(s: string): string {
   return out;
 }
 
+/**
+ * P3-B.1: index of the first top-level canonicalization boundary in `s` — the
+ * first `（`, `(`, or `「` encountered while NOT already inside a `「...」`
+ * span. A `「...」` elaboration is itself treated as a boundary (its content
+ * is descriptive quoting, the same role a bare `（...）` gloss plays) the same
+ * way a bare `（...）` is; a `（`/`(` that occurs INSIDE a `「...」` span is
+ * never a boundary, so it can't hijack the reducer into cutting the outer
+ * label at the wrong point — e.g. `使役受身形「〜させられる（連用中止：〜さ
+ * せられ）」` must cut at the outer `「`, not at the inner `（`. A simple
+ * depth-counted character scan — not a general parser; unmatched/unbalanced
+ * brackets fall through to "no boundary found" (same as today).
+ */
+function findBoundaryIndex(s: string): number {
+  let quoteDepth = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === "「") {
+      if (quoteDepth === 0) return i; // a 「...」 span itself starts a boundary
+      quoteDepth += 1;
+      continue;
+    }
+    if (ch === "」") {
+      quoteDepth = Math.max(0, quoteDepth - 1);
+      continue;
+    }
+    if ((ch === "（" || ch === "(") && quoteDepth === 0) return i;
+  }
+  return -1;
+}
+
 /** Canonical grammar-label core used for exact-equality matching (see section comment above). */
 function grammarCanonicalCore(raw: string): string {
   let s = raw.replace(/^.*<文法>/, "");
   s = stripJlptLevel(s);
   s = s.replace(/^〜+/, "").trim();
-  const parenIdx = s.search(/[（(]/);
-  if (parenIdx === -1) return s;
-  const prefix = s.slice(0, parenIdx).trim();
+  const boundaryIdx = findBoundaryIndex(s);
+  if (boundaryIdx === -1) return s;
+  const prefix = s.slice(0, boundaryIdx).trim();
   return prefix.length > 1 ? prefix : s; // keep a disambiguating gloss attached to a 1-char anchor
 }
 
