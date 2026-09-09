@@ -338,4 +338,118 @@ describe('formatAnalysisResult', () => {
     });
 
   });
+
+  describe('v0.3 Phase 2A — collocation / register taxonomy', () => {
+    const sixSection = `### 原句
+  - {台風|たいふう}が{沖縄|おきなわ}に{最接近|さいせっきん}する。
+  - 翻譯：颱風最接近沖繩。
+
+### 單字分析
+#### <單字>{最接近|さいせっきん}する
+  - 解釋：最靠近
+
+### 文法分析
+（無）
+
+### 搭配分析
+  - 〜に{最接近|さいせっきん}する：固定搭配，常見於氣象報導。
+  - {前線|ぜんせん}を{刺激|しげき}する：意思是活化鋒面。
+
+### 語體／新聞表現
+  - 句尾「〜か」：標題式的疑問／不確定與省略。
+  - 連用中止（「{刺激|しげき}し、」）：書面語語法，不是省略了「て」。
+`;
+
+    test('搭配分析 with two bullets → collocations length 2', () => {
+      const { json } = formatAnalysisResult(sixSection);
+      expect(json.collocations).toHaveLength(2);
+      expect(json.collocations[0]).toEqual({
+        text: '〜に{最接近|さいせっきん}する：固定搭配，常見於氣象報導。',
+      });
+      expect(json.collocations[1].text).toContain('{前線|ぜんせん}を{刺激|しげき}する');
+    });
+
+    test('語體／新聞表現 with two bullets → registers length 2', () => {
+      const { json } = formatAnalysisResult(sixSection);
+      expect(json.registers).toHaveLength(2);
+      expect(json.registers[0]).toEqual({ text: '句尾「〜か」：標題式的疑問／不確定與省略。' });
+      expect(json.registers[1].text).toContain('連用中止');
+    });
+
+    test('inline ruby markup is preserved verbatim in taxonomy items', () => {
+      const { json } = formatAnalysisResult(sixSection);
+      expect(json.collocations[0].text).toContain('{最接近|さいせっきん}');
+      expect(json.registers[1].text).toContain('{刺激|しげき}');
+    });
+
+    test('（無） section body → key present as an empty array', () => {
+      const md = '### 搭配分析\n（無）\n\n### 語體／新聞表現\n（無）\n';
+      const { json } = formatAnalysisResult(md);
+      expect(json.collocations).toEqual([]);
+      expect(json.registers).toEqual([]);
+    });
+
+    test('（無） written as a bullet also yields an empty array', () => {
+      const md = '### 搭配分析\n  - （無）\n\n### 語體／新聞表現\n  - （無）\n';
+      const { json } = formatAnalysisResult(md);
+      expect(json.collocations).toEqual([]);
+      expect(json.registers).toEqual([]);
+    });
+
+    test('section headings entirely absent → keys absent (legacy {words, grammars} shape)', () => {
+      const md = `### 單字分析
+#### <單字>{成長|せいちょう}する
+  - 解釋：成長
+
+### 文法分析
+#### <文法>〜として
+- 名詞 + として
+`;
+      const { json } = formatAnalysisResult(md);
+      expect('collocations' in json).toBe(false);
+      expect('registers' in json).toBe(false);
+      expect(Object.keys(json).sort()).toEqual(['grammars', 'words']);
+    });
+
+    test('empty / whitespace-only bullets are skipped', () => {
+      const md = [
+        '### 搭配分析',
+        '  - ',
+        '  -',
+        '  - {対応|たいおう}が{求|もと}められる：慣用搭配。',
+        '  -    ',
+        '',
+      ].join('\n');
+      const { json } = formatAnalysisResult(md);
+      expect(json.collocations).toHaveLength(1);
+      expect(json.collocations[0].text).toBe('{対応|たいおう}が{求|もと}められる：慣用搭配。');
+    });
+
+    test('nested sub-bullets are not promoted to taxonomy items', () => {
+      const md = [
+        '### 搭配分析',
+        '  - {前線|ぜんせん}を{刺激|しげき}する：活化鋒面。',
+        '    - 替換：{前線|ぜんせん}が{活発|かっぱつ}になる',
+        '',
+      ].join('\n');
+      const { json } = formatAnalysisResult(md);
+      expect(json.collocations).toHaveLength(1);
+      expect(json.collocations[0].text).toBe('{前線|ぜんせん}を{刺激|しげき}する：活化鋒面。');
+    });
+
+    test('provider HTML inside a bullet is stripped while ruby is kept', () => {
+      const md = '### 語體／新聞表現\n  - <b>句尾</b>「〜という」：<script>x</script>新聞轉述 {報道|ほうどう}。\n';
+      const { json } = formatAnalysisResult(md);
+      expect(json.registers).toHaveLength(1);
+      expect(json.registers[0].text).not.toMatch(/<\/?(?:b|script)>/i);
+      expect(json.registers[0].text).toContain('{報道|ほうどう}');
+    });
+
+    test('does not change rendered html — taxonomy sections still render as lists', () => {
+      const { html } = formatAnalysisResult(sixSection);
+      expect(html).toContain('搭配分析');
+      expect(html).toContain('<rb>前線</rb>');
+      expect(html).toContain('<rb>刺激</rb>');
+    });
+  });
 });

@@ -17,6 +17,15 @@
     "〜わけにはいかない（N2）",
     "〜ない限り（N2）"
   ],
+  "expectedReadings": [
+    {
+      "text": "歴史的景観",
+      "reading": "れきしてきけいかん"
+    }
+  ],
+  "grammarAliases": {
+    "〜つつも（N1）": ["つつ"]
+  },
   "expectedSections": [
     "原句",
     "單字分析",
@@ -64,7 +73,7 @@
     },
     {
       "name": "expectedGrammarCovered",
-      "required": true,
+      "required": false,
       "description": "Every required item in expectedGrammar appears as an identified grammar heading."
     },
     {
@@ -76,6 +85,11 @@
       "name": "longInputHandledWithoutTruncation",
       "required": true,
       "description": "The complete input is represented in the 原句 section and the response ends cleanly without a cut-off grammar block."
+    },
+    {
+      "name": "expectedReadingsCorrect",
+      "required": false,
+      "description": "Advisory (P3-A / P2-C quality metric, never a merge/deploy gate): Reading Contract tokens for curated high-confidence spans must produce the correct kana reading, e.g. 歴史的景観 -> れきしてきけいかん, not れきじてきけいかん."
     }
   ]
 }

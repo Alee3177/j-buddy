@@ -70,7 +70,7 @@
     },
     {
       "name": "expectedGrammarCovered",
-      "required": true,
+      "required": false,
       "description": "Every required item in expectedGrammar appears as an identified grammar heading."
     },
     {

@@ -3,6 +3,29 @@ import { LlmRequest, LlmResponse, SuccessResponse } from "../models/types";
 import { configSecret } from "../config";
 import { LlmBatchCompletion, LlmService, LlmStreamCompletion } from "./llmService";
 
+// Shared generation policy for both batch (chatCompletion) and streaming
+// (streamCompletion) requests. Kept identical across both so Tier-2/batch
+// evaluation reflects the same Gemini behavior as the production streaming
+// path used by the Chrome extension.
+const GEMINI_MAX_TOKENS = 16384;
+const GEMINI_THINKING_BUDGET = 512; // Specific token limit (0 to 24,576)
+const GEMINI_INCLUDE_THOUGHTS = false; // Returns model's reasoning steps
+// P1-C1 diagnostic (not yet an approved production behavior change): greedy
+// decoding, to isolate whether unstable grammar/vocab selection across
+// samples is sampling-driven or a stable model preference either way.
+const GEMINI_TEMPERATURE = 0;
+
+function geminiThinkingConfig() {
+  return {
+    google: {
+      thinking_config: {
+        thinking_budget: GEMINI_THINKING_BUDGET,
+        include_thoughts: GEMINI_INCLUDE_THOUGHTS,
+      },
+    },
+  };
+}
+
 export class GeminiLlmService implements LlmService {
   private apiUrl: string;
   private apiKey: string;
@@ -28,18 +51,11 @@ export class GeminiLlmService implements LlmService {
     const payload: LlmRequest = {
       messages,
       model: this.model,
-      temperature: 0.1,
-      max_tokens: 8192,
+      temperature: GEMINI_TEMPERATURE,
+      max_tokens: GEMINI_MAX_TOKENS,
       stream: true,
       stream_options: { include_usage: true },
-      extra_body: {
-        google: {
-          thinking_config: {
-            thinking_budget: 512, // Specific token limit (0 to 24,576)
-            include_thoughts: false // Returns model's reasoning steps
-          }
-        }
-      }
+      extra_body: geminiThinkingConfig(),
     };
 
     functions.logger.info("Calling Gemini API (streaming)", {
@@ -81,8 +97,9 @@ export class GeminiLlmService implements LlmService {
     const payload: LlmRequest = {
       messages,
       model: this.model,
-      temperature: 0.1,
-      max_tokens: 8192,
+      temperature: GEMINI_TEMPERATURE,
+      max_tokens: GEMINI_MAX_TOKENS,
+      extra_body: geminiThinkingConfig(),
     };
 
     functions.logger.info("Calling Gemini API", {

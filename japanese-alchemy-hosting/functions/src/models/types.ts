@@ -78,6 +78,25 @@ export interface AnalysisPageItem {
 export interface StructuredAnalysis {
   words?: Array<{ term: string; detail: string }>;
   grammars?: Array<{ point: string; explanation: string }>;
+  // Japanese Reader v0.3 Phase 2A: additive collocation / register taxonomy,
+  // parsed from the personal-provider "### 搭配分析" / "### 語體／新聞表現"
+  // sections. One entry per top-level markdown bullet; no sub-fields. Optional —
+  // absent on managed-provider results and every pre-Phase-2A saved page;
+  // present as [] when the section exists but is （無）. Persistence is wholesale.
+  collocations?: Array<{ text: string }>;
+  registers?: Array<{ text: string }>;
+  // Japanese Reader v0.3 Phase 1: authoritative reading-segmentation tokens for
+  // the analysed source text, persisted only when the extension proved them
+  // grounded byte-for-byte to the browser selection. Optional; absent on every
+  // pre-v0.3 saved page. Persistence is wholesale (firestoreService copies
+  // structured_json as-is) — do not add server-side handling for this field.
+  reading?: ReadingTokenContract;
+}
+
+export interface ReadingTokenContract {
+  version: 1;
+  source_text: string;
+  tokens: Array<{ text: string; reading: string | null }>;
 }
 
 // LLM API types (OpenAI-compatible, used by Gemini and ZAI)

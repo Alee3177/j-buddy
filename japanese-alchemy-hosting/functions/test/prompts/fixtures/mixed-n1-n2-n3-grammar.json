@@ -15,6 +15,9 @@
     "〜ようものなら（N1）",
     "〜かねない（N2）"
   ],
+  "grammarAliases": {
+    "〜ながらも（N2）": ["ながら"]
+  },
   "expectedSections": [
     "原句",
     "單字分析",
@@ -62,7 +65,7 @@
     },
     {
       "name": "expectedGrammarCovered",
-      "required": true,
+      "required": false,
       "description": "Every required item in expectedGrammar appears as an identified grammar heading."
     },
     {

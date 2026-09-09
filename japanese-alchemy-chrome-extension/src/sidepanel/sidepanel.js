@@ -123,6 +123,36 @@ export function convertToRuby(text) {
     });
 }
 
+/**
+ * Parse a v0.3 Phase 2A taxonomy section (`### 搭配分析`, `### 語體／新聞表現`)
+ * into `{ text }` items — one per top-level markdown bullet.
+ *
+ * Deliberately coarse: the provider packs form / meaning / register / example
+ * into a single inline bullet with only a soft `：` convention, so no sub-field
+ * splitting is attempted. Only direct list items (`- ` with 0–3 leading spaces)
+ * are taken; nested bullets, non-`-` markers, blank bullets, and the `（無）`
+ * sentinel are skipped. Inline ruby `{漢字|かな}` is preserved;
+ * `sanitizeAnalysisTextForStorage` drops any provider HTML (mirrors words /
+ * grammars). Returns `[]` when the section carries no valid bullets.
+ *
+ * @param {string} section  the `### …` section chunk from the heading split
+ * @returns {Array<{ text: string }>}
+ */
+function parseTaxonomyBulletSection(section) {
+    const firstNewline = section.indexOf('\n');
+    const body = firstNewline === -1 ? '' : section.slice(firstNewline + 1);
+    const items = [];
+    for (const rawLine of body.split('\n')) {
+        const line = rawLine.replace(/\r$/, '');
+        const match = /^ {0,3}-\s+(.+)$/.exec(line);
+        if (!match) continue;
+        const text = sanitizeAnalysisTextForStorage(match[1].trim());
+        if (!text || text === '（無）') continue;
+        items.push({ text });
+    }
+    return items;
+}
+
 // Function to format the analysis result using marked.js
 export function formatAnalysisResult(markdown) {
     // Handle null/undefined input
@@ -176,6 +206,19 @@ export function formatAnalysisResult(markdown) {
         });
     }
 
+    // v0.3 Phase 2A: additive collocation / register taxonomy. These sections
+    // only exist in the personal-provider (6-section) contract; the managed
+    // provider omits them, so the key is added ONLY when the heading is present.
+    // Heading present but empty / （無） → the key is an empty array.
+    const collocationSection = sections.find(section => section.trim().startsWith('### 搭配分析'));
+    if (collocationSection) {
+        jsonData.collocations = parseTaxonomyBulletSection(collocationSection);
+    }
+    const registerSection = sections.find(section => section.trim().startsWith('### 語體'));
+    if (registerSection) {
+        jsonData.registers = parseTaxonomyBulletSection(registerSection);
+    }
+
     // console.log('jsonData after word section:', jsonData);
     resultData.json = jsonData;
 
@@ -191,6 +234,48 @@ function isStructuredAnalysisEntry(entry, fields) {
         && fields.every((field) => typeof entry[field] === 'string');
 }
 
+/**
+ * Validate and clone the authoritative reading tokens for persistence inside
+ * `structured_json.reading` (Japanese Reader v0.3 Phase 1 — learner memory /
+ * review / quiz baseline).
+ *
+ * Pure and total. Accepts ONLY the exact persisted shape:
+ *   { version: 1,
+ *     source_text: non-empty string,
+ *     tokens: non-empty array of
+ *       { text: non-empty string, reading: non-empty string | null } }
+ * and additionally requires `tokens.map(t => t.text).join('') === source_text`.
+ *
+ * Returns a fresh object with freshly-built token objects — never a reference to
+ * the parser / provider value — or `null` for any malformed input. Readings are
+ * never invented, trimmed, width-folded, or otherwise normalized.
+ *
+ * @param {unknown} reading
+ * @returns {{ version: 1, source_text: string, tokens: Array<{ text: string, reading: string|null }> }|null}
+ */
+function normalizePersistedReading(reading) {
+    if (!reading || typeof reading !== 'object' || Array.isArray(reading)) return null;
+    if (reading.version !== 1) return null;
+    if (typeof reading.source_text !== 'string' || reading.source_text.length === 0) return null;
+    if (!Array.isArray(reading.tokens) || reading.tokens.length === 0) return null;
+
+    const tokens = [];
+    for (const rawToken of reading.tokens) {
+        if (!rawToken || typeof rawToken !== 'object' || Array.isArray(rawToken)) return null;
+        const { text } = rawToken;
+        const tokenReading = rawToken.reading;
+        if (typeof text !== 'string' || text.length === 0) return null;
+        const readingOk = tokenReading === null
+            || (typeof tokenReading === 'string' && tokenReading.length > 0);
+        if (!readingOk) return null;
+        tokens.push({ text, reading: tokenReading === null ? null : tokenReading });
+    }
+
+    if (tokens.map((token) => token.text).join('') !== reading.source_text) return null;
+
+    return { version: 1, source_text: reading.source_text, tokens };
+}
+
 function normalizeStructuredAnalysisResult(json) {
     if (!json || typeof json !== 'object') return null;
 
@@ -199,6 +284,42 @@ function normalizeStructuredAnalysisResult(json) {
         words: json.words || [],
         grammars: json.grammars || [],
     };
+
+    // v0.3 Phase 1: an optional `reading` sub-object rides inside structured_json.
+    // Keep a structurally-valid one (re-cloned, never by reference); silently
+    // drop a malformed one. Absent `reading` (old cached projections, V1 /
+    // managed-provider responses, ungrounded contracts) is left untouched.
+    if ('reading' in normalizedJson) {
+        const normalizedReading = normalizePersistedReading(normalizedJson.reading);
+        if (normalizedReading) {
+            normalizedJson.reading = normalizedReading;
+        } else {
+            delete normalizedJson.reading;
+        }
+    }
+
+    // v0.3 Phase 2A: optional `collocations` / `registers` taxonomy lists. Absent
+    // → left absent (old cached projections, managed-provider results). Present
+    // but not an array → dropped fail-closed. Present as an array → filtered to
+    // freshly-cloned `{ text: non-empty string }` items (an all-invalid array
+    // normalizes to []). Malformed taxonomy data never invalidates otherwise
+    // valid words / grammars.
+    for (const key of ['collocations', 'registers']) {
+        if (!(key in normalizedJson)) continue;
+        const raw = normalizedJson[key];
+        if (!Array.isArray(raw)) {
+            delete normalizedJson[key];
+            continue;
+        }
+        normalizedJson[key] = raw.reduce((items, item) => {
+            if (item && typeof item === 'object' && !Array.isArray(item)
+                && typeof item.text === 'string' && item.text.length > 0) {
+                items.push({ text: item.text });
+            }
+            return items;
+        }, []);
+    }
+
     return Array.isArray(normalizedJson.words)
         && Array.isArray(normalizedJson.grammars)
         && normalizedJson.words.every((word) => isStructuredAnalysisEntry(word, ['term', 'detail']))
@@ -645,7 +766,7 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
                         }
                         const humanMarkdown = separated.markdown;
-                        // v0.2 Phase 2B-2: when a valid reading contract is
+                        // v0.2 Phase 2B-2 / P2-A: when a valid reading contract is
                         // present AND it is grounded in the actual selected text
                         // (`selectedTextForRequest`, captured when this request
                         // started — never a fresh page-selection read, so a
@@ -656,11 +777,34 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         // / conjugation / parsing. Generated teaching content
                         // (漢字提取 / 單字分析 / 文法分析 / 搭配分析 / 語體 /
                         // examples / templates / the 翻譯 line) is never touched.
-                        // No / invalid / ungrounded contract -> strict no-op (the
-                        // fallback path; V1 + managed-provider are unaffected).
+                        // No / invalid / ungrounded contract -> plain canonical
+                        // fallback (P2-A; V1 + personal-provider lines that are
+                        // already correct are left byte-for-byte untouched).
                         const reconciled = reconcileRuby(
                             humanMarkdown, separated.readingContract, selectedTextForRequest
                         );
+                        // v0.3 Phase 1 / P2-B: persist the authoritative reading
+                        // tokens (for future learner memory / review / quiz
+                        // features) as `structured_json.reading` ONLY when
+                        // `reconciled.readingTrusted` is true — i.e. reconcileRuby
+                        // itself accepted and actually used this exact contract to
+                        // produce the final rendered `### 原句` source line. This
+                        // is the ONE authoritative trust decision; persistence must
+                        // never re-derive grounding independently (a prior,
+                        // independent `sourceText === selectedTextForRequest`
+                        // check here disagreed with render for multi-line and
+                        // ambiguous-candidate-line responses, since it didn't know
+                        // about those render-side refusals — P2-B closes that gap).
+                        // The contract JSON fence itself never reaches any string
+                        // path — only `separated.readingContract` object fields
+                        // (the exact contract reconcileRuby evaluated) are read.
+                        const persistedReading = reconciled.readingTrusted
+                            ? normalizePersistedReading({
+                                version: 1,
+                                source_text: separated.readingContract.sourceText,
+                                tokens: separated.readingContract.tokens,
+                            })
+                            : null;
                         if (reconciled.issues.length > 0) {
                             const reconcileCounts = {};
                             for (const issue of reconciled.issues) {
@@ -705,7 +849,11 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         const enrichedText = enrichMarkdownWithConjugation(rubyRepair.text);
                         activeAnalysisPreviewText = '';
                         const formattedResult = formatAnalysisResult(enrichedText);
-                        const normalizedJson = normalizeStructuredAnalysisResult(formattedResult.json);
+                        const normalizedJson = normalizeStructuredAnalysisResult(
+                            persistedReading
+                                ? { ...formattedResult.json, reading: persistedReading }
+                                : formattedResult.json
+                        );
                         if (!normalizedJson) {
                             throw new Error('Unable to format the completed analysis result.');
                         }
