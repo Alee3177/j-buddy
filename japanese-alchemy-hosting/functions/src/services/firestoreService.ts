@@ -6,6 +6,7 @@ import {
   AnalysisPageItem,
   StructuredAnalysis,
 } from "../models/types";
+import { LearningItem, NewLearningItem } from "../models/learningItem";
 
 export class FirestoreService {
   private db: admin.firestore.Firestore;
@@ -150,5 +151,64 @@ export class FirestoreService {
       : `Saved analysis page for user ${userId}`;
     functions.logger.info(logMessage);
     return true;
+  }
+
+  /**
+   * Japanese Reader v0.4 P1 — personal save path only.
+   *
+   * Writes the immutable analysis page AND its derived LearningItem review
+   * records in a SINGLE Firestore batch, so a save either lands both or neither
+   * (see saveItemsCallable for the shared path, which still uses
+   * saveAnalysisPage). The page document id is generated locally before the
+   * commit and passed to `deriveItems` so every LearningItem's
+   * `sourceAnalysisId` points at the exact page written in this same batch.
+   *
+   * Never touches a shared root collection. Callers must have already verified
+   * that `userId` is the authenticated user.
+   *
+   * Batch size is 1 (page) + N (items); N is bounded by the analysed text's
+   * vocab/grammar count (≪ the 500-write batch limit given the 500-char input
+   * ceiling), so no chunking is needed.
+   */
+  async savePersonalAnalysisPage(
+    userId: string,
+    page: { rendered_markdown: string; structured_json?: StructuredAnalysis },
+    metadata: any = {},
+    deriveItems: (sourceAnalysisId: string) => NewLearningItem[]
+  ): Promise<{ pageId: string | null; learningItemsCount: number }> {
+    if (!page || !page.rendered_markdown) {
+      return { pageId: null, learningItemsCount: 0 };
+    }
+
+    const batch = this.db.batch();
+
+    const pageRef = this.db.collection(`users/${userId}/analysis_pages`).doc();
+    const pageItem: AnalysisPageItem = {
+      rendered_markdown: page.rendered_markdown,
+      source_text: metadata.source_text || "",
+      source_url: metadata.source_url || "",
+      saved_at: metadata.saved_at || new Date().toISOString(),
+      createdAt: Date.now(),
+    };
+    if (page.structured_json) {
+      pageItem.structured_json = page.structured_json;
+    }
+    batch.set(pageRef, pageItem);
+
+    const items = deriveItems(pageRef.id);
+    const learningItemsRef = this.db.collection(`users/${userId}/learning_items`);
+    for (const item of items) {
+      const itemRef = learningItemsRef.doc();
+      // The stored document's `id` field IS the Firestore document id.
+      const stored: LearningItem = { ...item, id: itemRef.id };
+      batch.set(itemRef, stored);
+    }
+
+    await batch.commit();
+
+    functions.logger.info(
+      `Saved analysis page + ${items.length} learning item(s) for user ${userId}`
+    );
+    return { pageId: pageRef.id, learningItemsCount: items.length };
   }
 }

@@ -56,13 +56,15 @@ export type NewLearningItem = Omit<LearningItem, "id">;
 /**
  * Loose shape of the `structured_json` blob this module consumes. Every field is
  * optional and every value is treated as untrusted — the extractor tolerates
- * malformed data without throwing (see {@link deriveLearningItems}).
+ * malformed data without throwing (see {@link deriveLearningItems}). Structurally
+ * compatible with `models/types.ts` `StructuredAnalysis` so the persisted blob
+ * can be passed straight through; extra keys (collocations, registers, …) are
+ * ignored.
  */
 export interface StructuredAnalysisInput {
   words?: unknown;
   grammars?: unknown;
   reading?: unknown;
-  [key: string]: unknown;
 }
 
 /** Source-artifact metadata copied (verbatim) onto each derived item. */

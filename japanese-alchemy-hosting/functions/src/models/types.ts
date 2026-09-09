@@ -62,6 +62,11 @@ export interface SaveItemsResponse {
     words_count: number;
     grammars_count: number;
     page_saved: boolean;
+    // Japanese Reader v0.4 P1: count of LearningItem docs derived from
+    // structured_json and written under users/{uid}/learning_items. Always 0 for
+    // shared saves and for personal saves without a page. Additive field —
+    // pre-v0.4 clients ignore it.
+    learning_items_count: number;
   };
 }
 

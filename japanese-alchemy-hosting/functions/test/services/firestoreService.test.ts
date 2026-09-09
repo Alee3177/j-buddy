@@ -231,4 +231,165 @@ describe("FirestoreService", () => {
       }));
     });
   });
+
+  // Japanese Reader v0.4 P1 — personal page + learning items, one atomic batch.
+  describe("savePersonalAnalysisPage", () => {
+    const structuredJson = { words: [], grammars: [] };
+
+    function wireCollections(pageId = "page-abc") {
+      let itemSeq = 0;
+      const pagesCol = { doc: jest.fn(() => ({ id: pageId })) };
+      const itemsCol = { doc: jest.fn(() => ({ id: `item-${++itemSeq}` })) };
+      mockDb.collection.mockImplementation((path: string) =>
+        path.endsWith("/analysis_pages") ? pagesCol : itemsCol
+      );
+      return { pagesCol, itemsCol };
+    }
+
+    const twoItems = (sourceAnalysisId: string) =>
+      [
+        {
+          userId: "u1",
+          sourceAnalysisId,
+          type: "vocab",
+          surface: "改善",
+          status: "NEW",
+          createdAt: 5,
+          updatedAt: 5,
+          lexicalKey: "vocab|改善|かいぜん",
+          reading: "かいぜん",
+          meaning: "改善",
+          sourceSentence: "S",
+          sourceUrl: null,
+        },
+        {
+          userId: "u1",
+          sourceAnalysisId,
+          type: "grammar",
+          surface: "ても",
+          status: "NEW",
+          createdAt: 5,
+          updatedAt: 5,
+          lexicalKey: "grammar|ても|",
+          reading: null,
+          meaning: null,
+          sourceSentence: "S",
+          sourceUrl: null,
+        },
+      ] as any;
+
+    it("writes the page and every learning item in a single batch commit", async () => {
+      wireCollections("page-abc");
+      const deriveItems = jest.fn(twoItems);
+
+      const result = await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "# md", structured_json: structuredJson },
+        { source_text: "S", source_url: "https://ex.test/a", saved_at: "2026-09-09T00:00:00.000Z" },
+        deriveItems
+      );
+
+      expect(result).toEqual({ pageId: "page-abc", learningItemsCount: 2 });
+      expect(deriveItems).toHaveBeenCalledWith("page-abc");
+      // 1 page + 2 items, exactly one commit.
+      expect(mockBatch.set).toHaveBeenCalledTimes(3);
+      expect(mockBatch.commit).toHaveBeenCalledTimes(1);
+      expect(mockDb.collection).toHaveBeenCalledWith("users/u1/analysis_pages");
+      expect(mockDb.collection).toHaveBeenCalledWith("users/u1/learning_items");
+    });
+
+    it("writes exactly one analysis_pages document carrying rendered_markdown + structured_json", async () => {
+      wireCollections("page-abc");
+      await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "# md", structured_json: structuredJson },
+        { source_text: "S", source_url: "" },
+        twoItems
+      );
+      const pageWrites = mockBatch.set.mock.calls.filter(
+        (c: any[]) => c[0].id === "page-abc"
+      );
+      expect(pageWrites).toHaveLength(1);
+      expect(pageWrites[0][1]).toEqual(
+        expect.objectContaining({
+          rendered_markdown: "# md",
+          structured_json: structuredJson,
+          source_text: "S",
+          source_url: "",
+        })
+      );
+      expect(typeof pageWrites[0][1].createdAt).toBe("number");
+      expect(typeof pageWrites[0][1].saved_at).toBe("string");
+    });
+
+    it("stores each learning item with its Firestore doc id as the `id` field", async () => {
+      wireCollections("page-abc");
+      await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "# md" },
+        {},
+        twoItems
+      );
+      const itemWrites = mockBatch.set.mock.calls.filter((c: any[]) => c[0].id !== "page-abc");
+      expect(itemWrites).toHaveLength(2);
+      for (const [ref, doc] of itemWrites) {
+        expect(doc.id).toBe(ref.id);
+        expect(doc.id).toMatch(/^item-\d+$/);
+        expect(doc.sourceAnalysisId).toBe("page-abc");
+        expect(doc.status).toBe("NEW");
+      }
+    });
+
+    it("never addresses a shared root collection", async () => {
+      wireCollections();
+      await service.savePersonalAnalysisPage("u1", { rendered_markdown: "# md" }, {}, twoItems);
+      for (const [path] of mockDb.collection.mock.calls) {
+        expect(path).toMatch(/^users\/u1\//);
+      }
+    });
+
+    it("returns {pageId:null} and never derives or commits when there is no page", async () => {
+      wireCollections();
+      const deriveItems = jest.fn(() => {
+        throw new Error("must not derive without a page");
+      });
+      const result = await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "" } as any,
+        {},
+        deriveItems
+      );
+      expect(result).toEqual({ pageId: null, learningItemsCount: 0 });
+      expect(deriveItems).not.toHaveBeenCalled();
+      expect(mockBatch.commit).not.toHaveBeenCalled();
+    });
+
+    it("commits a page-only save (zero derived items) without error", async () => {
+      wireCollections("p1");
+      const result = await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "# md" },
+        {},
+        () => []
+      );
+      expect(result).toEqual({ pageId: "p1", learningItemsCount: 0 });
+      expect(mockBatch.set).toHaveBeenCalledTimes(1);
+      expect(mockBatch.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates a batch-commit failure and routes every write through the one batch (nothing persisted on failure)", async () => {
+      wireCollections("page-abc");
+      mockBatch.commit.mockRejectedValueOnce(new Error("batch commit failed"));
+
+      await expect(
+        service.savePersonalAnalysisPage("u1", { rendered_markdown: "# md" }, {}, twoItems)
+      ).rejects.toThrow("batch commit failed");
+
+      // Page + both items were staged on the SAME batch and no write bypassed it,
+      // so the rejected commit means Firestore applied none of them.
+      expect(mockBatch.set).toHaveBeenCalledTimes(3);
+      expect(mockBatch.commit).toHaveBeenCalledTimes(1);
+      expect(mockDb.batch).toHaveBeenCalledTimes(1);
+    });
+  });
 });
