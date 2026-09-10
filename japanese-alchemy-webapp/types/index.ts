@@ -55,3 +55,49 @@ export interface AnalysisPage {
   createdAt: Date;
   structured_json?: StructuredAnalysis;
 }
+
+// Japanese Reader v0.4 P2.1 — personal learning-items read model.
+//
+// Mirrors the shape persisted by the Functions layer
+// (japanese-alchemy-hosting/functions/src/models/learningItem.ts). Every
+// occurrence is stored and returned raw — no dedup, no grouping by
+// `lexicalKey`, no review/SRS fields. `createdAt` / `updatedAt` are epoch
+// milliseconds and are kept as numbers here (NOT converted to `Date` like the
+// other read models) because the pagination cursor is derived from the exact
+// stored value.
+export type LearningItemType = 'vocab' | 'grammar';
+
+export type LearningItemStatus = 'NEW' | 'LEARNING' | 'REVIEWED';
+
+export interface LearningItem {
+  id: string;
+  userId: string;
+  sourceAnalysisId: string;
+  type: LearningItemType;
+  surface: string;
+  status: LearningItemStatus;
+  createdAt: number;
+  updatedAt: number;
+  lexicalKey: string;
+  reading: string | null;
+  meaning: string | null;
+  sourceSentence: string;
+  sourceUrl: string | null;
+}
+
+// Decoded pagination cursor: the ordering position of the last returned item.
+// Encoded on the wire as base64url(JSON.stringify({ createdAt, id })).
+export interface LearningItemsCursor {
+  createdAt: number;
+  id: string;
+}
+
+export interface ListLearningItemsOptions {
+  limit?: number;
+  cursor?: string | null;
+}
+
+export interface ListLearningItemsResult {
+  items: LearningItem[];
+  nextCursor: string | null;
+}
