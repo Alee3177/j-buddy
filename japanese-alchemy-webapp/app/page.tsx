@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import {
-  getUserVocabularies, 
+  getUserVocabularies,
   getUserGrammars,
   getUserAnalysisPages,
   deleteAnalysisPage,
@@ -16,6 +16,8 @@ import {
   getSharedVocabularies,
   getSharedGrammars,
 } from '@/services/firestoreService';
+import { useLearningItemsFeed } from '@/lib/learningItemsFeed';
+import { LearningItemsPanel } from '@/components/LearningItemsPanel';
 import { Vocabulary, Grammar, AnalysisPage } from '@/types';
 import { 
   parseFurigana, 
@@ -76,6 +78,12 @@ export default function Dashboard() {
   const [sharedVocabularies, setSharedVocabularies] = useState<Vocabulary[]>([]);
   const [sharedGrammars, setSharedGrammars] = useState<Grammar[]>([]);
   const [activeTab, setActiveTab] = useState('vocabularies');
+
+  // Japanese Reader v0.4 P2.2 — read-only personal learning-items feed.
+  // Driven by the auth lifecycle: no query before auth resolves, cleared on
+  // sign-out, and reloaded fresh when the signed-in user changes.
+  const { state: learningFeed, loadMore: loadMoreLearningItems } =
+    useLearningItemsFeed(user?.uid ?? null, !loading);
 
   useEffect(() => {
     let loadingData = true;
@@ -184,7 +192,9 @@ export default function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className={`grid w-full max-w-xl ${user ? 'grid-cols-4' : 'grid-cols-3'}`}>
+          <TabsList
+            className={`grid w-full ${user ? 'max-w-3xl grid-cols-5' : 'max-w-xl grid-cols-3'}`}
+          >
             <TabsTrigger value="vocabularies">
               單字 ({allVocabularies.length})
             </TabsTrigger>
@@ -194,6 +204,11 @@ export default function Dashboard() {
             {user && (
               <TabsTrigger value="pages">
                 頁面 ({analysisPages.length})
+              </TabsTrigger>
+            )}
+            {user && (
+              <TabsTrigger value="learning">
+                學習項目 ({learningFeed.items.length})
               </TabsTrigger>
             )}
             <TabsTrigger value="shared-pages">
@@ -347,6 +362,22 @@ export default function Dashboard() {
                   })
                 )}
               </div>
+            </TabsContent>
+          )}
+
+          {user && (
+            <TabsContent value="learning" className="space-y-4">
+              <div>
+                <h2 className="text-2xl font-bold">我的學習項目</h2>
+                <p className="text-muted-foreground">
+                  依儲存時間排列的單字與文法紀錄
+                </p>
+              </div>
+
+              <LearningItemsPanel
+                state={learningFeed}
+                onLoadMore={loadMoreLearningItems}
+              />
             </TabsContent>
           )}
 

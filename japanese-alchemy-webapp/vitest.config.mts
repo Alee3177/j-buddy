@@ -1,0 +1,17 @@
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vitest/config';
+
+// Mirror the `@/*` path alias from tsconfig.json so Vitest resolves it the same
+// way `next build` and `tsc` do. (tsconfig has no `baseUrl`, which the Vite
+// resolver does not pick up on its own.) Test environment stays the Vitest
+// default (node); files opt into jsdom with `/* @vitest-environment jsdom */`.
+export default defineConfig({
+  resolve: {
+    alias: [
+      {
+        find: /^@\//,
+        replacement: fileURLToPath(new URL('./', import.meta.url)),
+      },
+    ],
+  },
+});
