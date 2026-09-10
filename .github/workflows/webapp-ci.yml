@@ -1,0 +1,94 @@
+name: Webapp CI
+
+# Quality gates for japanese-alchemy-webapp (Japanese Reader) and the
+# review_cards Firestore rules. No Firebase secrets are used — the build works
+# without .env.local (P4.2) and the rules job runs against the local emulator.
+#
+# NOTE: this repo's .gitignore excludes package-lock.json, so `npm ci` is not
+# possible; every job uses `npm install`.
+
+on:
+  pull_request:
+    paths:
+      - 'japanese-alchemy-webapp/**'
+      - 'japanese-alchemy-hosting/firestore.rules'
+      - 'japanese-alchemy-hosting/firebase.json'
+      - '.github/workflows/webapp-ci.yml'
+  push:
+    branches:
+      - main
+      - 'feature/**'
+    paths:
+      - 'japanese-alchemy-webapp/**'
+      - 'japanese-alchemy-hosting/firestore.rules'
+      - 'japanese-alchemy-hosting/firebase.json'
+      - '.github/workflows/webapp-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webapp-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  webapp-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: japanese-alchemy-webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # No npm cache: this repo's .gitignore excludes package-lock.json, so
+          # there is no lock file to key the cache on.
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (static export, no .env.local)
+        run: npm run build
+
+      - name: Verify static export was produced
+        run: test -d out && test -f out/index.html
+
+  firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # No npm cache: this repo's .gitignore excludes package-lock.json, so
+          # there is no lock file to key the cache on.
+
+      # The Firestore emulator needs a JRE. GitHub's ubuntu image ships one, but
+      # pin it for reproducibility.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install webapp deps (provides @firebase/rules-unit-testing + vitest)
+        working-directory: japanese-alchemy-webapp
+        run: npm install --no-audit --no-fund
+
+      - name: review_cards rules tests (Firestore emulator)
+        working-directory: japanese-alchemy-hosting
+        run: >
+          npx --yes firebase-tools@15 emulators:exec
+          --only firestore
+          --project demo-japanese-alchemy
+          "npm --prefix ../japanese-alchemy-webapp run test:rules"

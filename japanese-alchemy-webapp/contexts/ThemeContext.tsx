@@ -12,17 +12,21 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('system');
-  const [actualTheme, setActualTheme] = useState<'light' | 'dark'>('light');
+function readSavedTheme(): Theme {
+  // Runs during render (incl. the lazy useState initializer). On the server /
+  // prerender there is no localStorage — fall back to 'system'. `theme` is never
+  // rendered into markup directly and `actualTheme` starts 'light' on both
+  // sides, so this introduces no hydration mismatch.
+  if (typeof window === 'undefined') return 'system';
+  const saved = window.localStorage.getItem('theme');
+  return saved === 'light' || saved === 'dark' || saved === 'system'
+    ? saved
+    : 'system';
+}
 
-  useEffect(() => {
-    // Load saved theme from localStorage
-    const savedTheme = localStorage.getItem('theme') as Theme;
-    if (savedTheme) {
-      setThemeState(savedTheme);
-    }
-  }, []);
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = useState<Theme>(readSavedTheme);
+  const [actualTheme, setActualTheme] = useState<'light' | 'dark'>('light');
 
   useEffect(() => {
     const root = window.document.documentElement;

@@ -8,6 +8,7 @@
     "preview": "npm run build && firebase emulators:start --only hosting",
     "lint": "eslint",
     "test": "vitest run",
+    "test:rules": "vitest run --config vitest.rules.config.mts",
     "deploy": "npm run build && firebase deploy --only hosting"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

@@ -31,8 +31,8 @@ export default function AuthPage() {
         await signIn(email, password);
       }
       router.push('/');
-    } catch (err: any) {
-      setError(err.message || '發生錯誤');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '發生錯誤');
     } finally {
       setLoading(false);
     }
@@ -45,8 +45,8 @@ export default function AuthPage() {
     try {
       await signInWithGoogle();
       router.push('/');
-    } catch (err: any) {
-      setError(err.message || '發生錯誤');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '發生錯誤');
     } finally {
       setLoading(false);
     }
