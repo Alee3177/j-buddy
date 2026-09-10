@@ -1,12 +1,16 @@
 /* @vitest-environment jsdom */
 
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The panel is pure/presentational, but importing the feed module transitively
 // pulls in the Firestore service and its Firebase init. Stub that boundary the
 // same way services/firestoreService.test.ts does.
 vi.mock('@/lib/firebase', () => ({ db: {}, auth: { currentUser: null } }));
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { LearningItemsPanel } from './LearningItemsPanel';
 import { initialLearningItemsFeedState, type LearningItemsFeedState } from '@/lib/learningItemsFeed';
@@ -171,5 +175,127 @@ describe('LearningItemsPanel', () => {
     );
     expect(bad).not.toContain('來源');
     expect(bad).not.toContain('javascript:alert');
+  });
+
+  it('renders no 加入複習 button when onAddToReview is not provided (unchanged P2.2 behavior)', () => {
+    const html = render(ready([item(), item({ id: 'id-2' })], { cursor: null }));
+    expect(html).not.toContain('加入複習');
+    expect(html).not.toContain('<button');
+  });
+});
+
+// P3.4 — per-card "加入複習" action.
+describe('LearningItemsPanel — 加入複習', () => {
+  function mount(
+    state: LearningItemsFeedState,
+    onAddToReview: (item: LearningItem) => Promise<unknown>
+  ) {
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const addButtons = () =>
+      [...container.querySelectorAll('button')].filter((b) =>
+        b.textContent?.startsWith('加入複習')
+      );
+    return {
+      container,
+      addButtons,
+      async render() {
+        await act(async () => {
+          root.render(
+            <LearningItemsPanel
+              state={state}
+              onLoadMore={() => {}}
+              onAddToReview={onAddToReview}
+            />
+          );
+        });
+      },
+      async clickAdd(index: number) {
+        const btn = addButtons()[index];
+        await act(async () => {
+          btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+      },
+      text() {
+        return container.textContent ?? '';
+      },
+      unmount() {
+        act(() => root.unmount());
+      },
+    };
+  }
+
+  const twoItems = ready([item({ id: 'a' }), item({ id: 'b' })], { cursor: null });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('renders one 加入複習 button per card', async () => {
+    const m = mount(twoItems, async () => {});
+    await m.render();
+    expect(m.addButtons()).toHaveLength(2);
+    m.unmount();
+  });
+
+  it('clicking calls materializeReviewCard with that exact item', async () => {
+    const onAdd = vi.fn((item: LearningItem) => Promise.resolve(item));
+    const m = mount(twoItems, onAdd);
+    await m.render();
+    await m.clickAdd(1);
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onAdd.mock.calls[0][0].id).toBe('b');
+    m.unmount();
+  });
+
+  it('disables only the clicked card\'s button while its request is pending', async () => {
+    let resolve!: () => void;
+    const onAdd = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    const m = mount(twoItems, onAdd);
+    await m.render();
+    await m.clickAdd(0);
+
+    const [b0, b1] = m.addButtons();
+    expect(b0.disabled).toBe(true);
+    expect(b1.disabled).toBe(false);
+
+    await act(async () => {
+      resolve();
+    });
+    m.unmount();
+  });
+
+  it('shows 已加入複習 after a successful add', async () => {
+    const m = mount(twoItems, async () => {});
+    await m.render();
+    await m.clickAdd(0);
+    expect(m.text()).toContain('已加入複習');
+    m.unmount();
+  });
+
+  it('shows a generic failure hint and allows retry after a failed add', async () => {
+    const onAdd = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('permission-denied'))
+      .mockResolvedValueOnce(undefined);
+    const m = mount(twoItems, onAdd);
+    await m.render();
+
+    await m.clickAdd(0);
+    expect(m.text()).toContain('加入失敗，請再試一次');
+    expect(m.text()).not.toMatch(/permission-denied/);
+
+    await m.clickAdd(0); // retry
+    expect(onAdd).toHaveBeenCalledTimes(2);
+    expect(m.text()).toContain('已加入複習');
+    m.unmount();
+  });
+
+  it('does not introduce edit / delete / bulk-add controls', async () => {
+    const m = mount(twoItems, async () => {});
+    await m.render();
+    expect(m.text()).not.toContain('刪除');
+    expect(m.text()).not.toContain('編輯');
+    expect(m.text()).not.toContain('全部加入');
   });
 });

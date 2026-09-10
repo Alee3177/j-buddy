@@ -18,22 +18,60 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { parseFurigana } from '@/lib/textUtils';
+import { parseFurigana, safeExternalUrl } from '@/lib/textUtils';
+import { useState } from 'react';
 import type { LearningItem } from '@/types';
 import type { LearningItemsFeedState } from '@/lib/learningItemsFeed';
 
-/** Mirror of the dashboard's existing source-URL guard (app/page.tsx). */
-function safeExternalUrl(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return ['https:', 'http:'].includes(url.protocol) ? url.toString() : null;
-  } catch {
-    return null;
+type AddToReviewStatus = 'idle' | 'pending' | 'done' | 'error';
+
+function AddToReviewButton({
+  item,
+  onAddToReview,
+}: {
+  item: LearningItem;
+  onAddToReview: (item: LearningItem) => Promise<unknown>;
+}) {
+  const [status, setStatus] = useState<AddToReviewStatus>('idle');
+
+  if (status === 'done') {
+    return <span className="text-xs text-muted-foreground">已加入複習</span>;
   }
+
+  const handleClick = async () => {
+    setStatus('pending');
+    try {
+      await onAddToReview(item);
+      setStatus('done');
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  return (
+    <span className="flex items-center gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={status === 'pending'}
+        onClick={handleClick}
+      >
+        加入複習
+      </Button>
+      {status === 'error' && (
+        <span className="text-xs text-gray-500">加入失敗，請再試一次</span>
+      )}
+    </span>
+  );
 }
 
-function LearningItemCard({ item }: { item: LearningItem }) {
+function LearningItemCard({
+  item,
+  onAddToReview,
+}: {
+  item: LearningItem;
+  onAddToReview?: (item: LearningItem) => Promise<unknown>;
+}) {
   const sourceUrl = safeExternalUrl(item.sourceUrl);
 
   return (
@@ -62,24 +100,27 @@ function LearningItemCard({ item }: { item: LearningItem }) {
           )}
         </CardDescription>
       </CardHeader>
-      {(item.reading || item.meaning || item.sourceSentence) && (
-        <CardContent className="space-y-1 text-sm">
-          {item.reading && (
-            <p className="text-muted-foreground">{item.reading}</p>
-          )}
-          {item.meaning && (
-            <p dangerouslySetInnerHTML={{ __html: parseFurigana(item.meaning) }} />
-          )}
-          {item.sourceSentence && (
-            <p
-              className="text-muted-foreground"
-              dangerouslySetInnerHTML={{
-                __html: parseFurigana(item.sourceSentence),
-              }}
-            />
-          )}
-        </CardContent>
-      )}
+      <CardContent className="space-y-1 text-sm">
+        {item.reading && (
+          <p className="text-muted-foreground">{item.reading}</p>
+        )}
+        {item.meaning && (
+          <p dangerouslySetInnerHTML={{ __html: parseFurigana(item.meaning) }} />
+        )}
+        {item.sourceSentence && (
+          <p
+            className="text-muted-foreground"
+            dangerouslySetInnerHTML={{
+              __html: parseFurigana(item.sourceSentence),
+            }}
+          />
+        )}
+        {onAddToReview && (
+          <div className="pt-2">
+            <AddToReviewButton item={item} onAddToReview={onAddToReview} />
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 }
@@ -87,9 +128,11 @@ function LearningItemCard({ item }: { item: LearningItem }) {
 export function LearningItemsPanel({
   state,
   onLoadMore,
+  onAddToReview,
 }: {
   state: LearningItemsFeedState;
   onLoadMore: () => void;
+  onAddToReview?: (item: LearningItem) => Promise<unknown>;
 }) {
   if (state.phase === 'loading') {
     return (
@@ -121,7 +164,11 @@ export function LearningItemsPanel({
     <div className="space-y-4">
       <div className="grid gap-4">
         {state.items.map((item) => (
-          <LearningItemCard key={item.id} item={item} />
+          <LearningItemCard
+            key={item.id}
+            item={item}
+            onAddToReview={onAddToReview}
+          />
         ))}
       </div>
 

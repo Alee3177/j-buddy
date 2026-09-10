@@ -18,6 +18,9 @@ import {
 } from '@/services/firestoreService';
 import { useLearningItemsFeed } from '@/lib/learningItemsFeed';
 import { LearningItemsPanel } from '@/components/LearningItemsPanel';
+import { useReviewSession } from '@/lib/reviewSession';
+import { ReviewPanel } from '@/components/ReviewPanel';
+import { materializeReviewCard } from '@/services/reviewService';
 import { Vocabulary, Grammar, AnalysisPage } from '@/types';
 import { 
   parseFurigana, 
@@ -84,6 +87,9 @@ export default function Dashboard() {
   // sign-out, and reloaded fresh when the signed-in user changes.
   const { state: learningFeed, loadMore: loadMoreLearningItems } =
     useLearningItemsFeed(user?.uid ?? null, !loading);
+
+  // Japanese Reader v0.4 P3.4 — due-review session for the "複習" tab.
+  const reviewSession = useReviewSession(user?.uid ?? null, !loading);
 
   useEffect(() => {
     let loadingData = true;
@@ -193,7 +199,7 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto px-4 py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList
-            className={`grid w-full ${user ? 'max-w-3xl grid-cols-5' : 'max-w-xl grid-cols-3'}`}
+            className={`grid w-full ${user ? 'max-w-4xl grid-cols-6' : 'max-w-xl grid-cols-3'}`}
           >
             <TabsTrigger value="vocabularies">
               單字 ({allVocabularies.length})
@@ -209,6 +215,11 @@ export default function Dashboard() {
             {user && (
               <TabsTrigger value="learning">
                 學習項目 ({learningFeed.items.length})
+              </TabsTrigger>
+            )}
+            {user && (
+              <TabsTrigger value="review">
+                複習 ({reviewSession.remaining})
               </TabsTrigger>
             )}
             <TabsTrigger value="shared-pages">
@@ -377,7 +388,21 @@ export default function Dashboard() {
               <LearningItemsPanel
                 state={learningFeed}
                 onLoadMore={loadMoreLearningItems}
+                onAddToReview={materializeReviewCard}
               />
+            </TabsContent>
+          )}
+
+          {user && (
+            <TabsContent value="review" className="space-y-4">
+              <div>
+                <h2 className="text-2xl font-bold">複習</h2>
+                <p className="text-muted-foreground">
+                  複習今天到期的單字與文法
+                </p>
+              </div>
+
+              <ReviewPanel session={reviewSession} />
             </TabsContent>
           )}
 

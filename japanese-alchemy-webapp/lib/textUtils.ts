@@ -22,6 +22,21 @@ export function sanitizeAnalysisHtml(html: string): string {
 }
 
 /**
+ * Return `value` as a safe external URL string, or `null` if it is empty,
+ * malformed, or not `http(s)`. Shared by the dashboard panels so unsafe-link
+ * handling is defined once (rejects `javascript:`, `data:`, etc.).
+ */
+export function safeExternalUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse furigana text and convert to RUBY HTML tags
  * Example: "{続|つづ}ける" -> "<ruby>続<rt>つづ</rt></ruby>ける"
  */
