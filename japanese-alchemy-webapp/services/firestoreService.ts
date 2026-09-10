@@ -10,8 +10,21 @@ import {
   startAfter,
   Timestamp,
 } from 'firebase/firestore';
-import type { QueryConstraint } from 'firebase/firestore';
-import { db, auth } from '@/lib/firebase';
+import type { Firestore, QueryConstraint } from 'firebase/firestore';
+import { db as firestoreDb, auth as firebaseAuth } from '@/lib/firebase';
+
+/**
+ * The Firestore client, or a generic (Firebase-detail-free) error when the
+ * webapp was built/served without Firebase config. Signed-in UI never reaches
+ * this in degraded mode — it is defence-in-depth so a stray call fails
+ * deterministically before any network attempt.
+ */
+function requireDb(): Firestore {
+  if (!firestoreDb) {
+    throw new Error('This feature is unavailable because Firebase is not configured.');
+  }
+  return firestoreDb;
+}
 import {
   Vocabulary,
   Grammar,
@@ -34,6 +47,7 @@ const timestampToDate = (timestamp: Timestamp | Date | number): Date => {
 };
 
 export async function getUserVocabularies(userId: string): Promise<Vocabulary[]> {
+  const db = requireDb();
   const userDocRef = doc(db, 'users', userId);
   const q = query(
     collection(userDocRef, VOCABULARIES_SUBCOLLECTION),
@@ -49,6 +63,7 @@ export async function getUserVocabularies(userId: string): Promise<Vocabulary[]>
 }
 
 export async function getUserGrammars(userId: string): Promise<Grammar[]> {
+  const db = requireDb();
   const userDocRef = doc(db, 'users', userId);
   const q = query(
     collection(userDocRef, GRAMMARS_SUBCOLLECTION),
@@ -64,6 +79,7 @@ export async function getUserGrammars(userId: string): Promise<Grammar[]> {
 }
 
 export async function getUserAnalysisPages(userId: string): Promise<AnalysisPage[]> {
+  const db = requireDb();
   const userDocRef = doc(db, 'users', userId);
   const q = query(
     collection(userDocRef, ANALYSIS_PAGES_SUBCOLLECTION),
@@ -79,10 +95,12 @@ export async function getUserAnalysisPages(userId: string): Promise<AnalysisPage
 }
 
 export async function deleteAnalysisPage(userId: string, pageId: string): Promise<void> {
+  const db = requireDb();
   await deleteDoc(doc(db, 'users', userId, ANALYSIS_PAGES_SUBCOLLECTION, pageId));
 }
 
 export async function getSharedAnalysisPages(): Promise<AnalysisPage[]> {
+  const db = requireDb();
   const q = query(
     collection(db, 'shared_analysis_pages'),
     orderBy('createdAt', 'desc')
@@ -100,6 +118,7 @@ export async function getSharedAnalysisPages(): Promise<AnalysisPage[]> {
 }
 
 export async function getSharedVocabularies(): Promise<Vocabulary[]> {
+  const db = requireDb();
   const q = query(
     collection(db, 'shared_vocabularies'),
     orderBy('createdAt', 'desc')
@@ -118,6 +137,7 @@ export async function getSharedVocabularies(): Promise<Vocabulary[]> {
 }
 
 export async function getSharedGrammars(): Promise<Grammar[]> {
+  const db = requireDb();
   const q = query(
     collection(db, 'shared_grammars'),
     orderBy('createdAt', 'desc')
@@ -256,10 +276,11 @@ function toLearningItem(
 export async function listLearningItems(
   options: ListLearningItemsOptions = {}
 ): Promise<ListLearningItemsResult> {
-  const currentUser = auth.currentUser;
+  const currentUser = firebaseAuth?.currentUser;
   if (!currentUser) {
     throw new Error('You must be signed in to view learning items.');
   }
+  const db = requireDb();
 
   const cursor =
     options.cursor != null && options.cursor !== ''

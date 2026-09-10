@@ -23,7 +23,8 @@ import {
   runTransaction,
   where,
 } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import type { Firestore } from 'firebase/firestore';
+import { auth as firebaseAuth, db as firestoreDb } from '@/lib/firebase';
 import {
   REVIEW_QUEUE_CAP,
   computeNextSchedule,
@@ -39,11 +40,23 @@ const REVIEW_CARDS_SUBCOLLECTION = 'review_cards';
 const CARD_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function requireUid(action: string): string {
-  const user = auth.currentUser;
+  const user = firebaseAuth?.currentUser;
   if (!user) {
     throw new Error(`You must be signed in to ${action}.`);
   }
   return user.uid;
+}
+
+/**
+ * The Firestore client, or a generic (Firebase-detail-free) error when the
+ * webapp was built/served without Firebase config. Defence-in-depth: signed-in
+ * UI never reaches this in degraded mode.
+ */
+function requireDb(): Firestore {
+  if (!firestoreDb) {
+    throw new Error('This feature is unavailable because Firebase is not configured.');
+  }
+  return firestoreDb;
 }
 
 /**
@@ -62,6 +75,7 @@ export async function materializeReviewCard(
   options: { now?: number } = {}
 ): Promise<ReviewCard> {
   const uid = requireUid('add a review card');
+  const db = requireDb();
   const now = options.now ?? Date.now();
   const cardId = reviewCardIdFor(item.lexicalKey);
   const ref = doc(db, 'users', uid, REVIEW_CARDS_SUBCOLLECTION, cardId);
@@ -106,6 +120,7 @@ export async function applyReviewRating(
   if (!Number.isFinite(now)) {
     throw new Error('Invalid review timestamp.');
   }
+  const db = requireDb();
 
   const ref = doc(db, 'users', uid, REVIEW_CARDS_SUBCOLLECTION, cardId);
 
@@ -180,6 +195,7 @@ export async function listDueReviewCards(
   if (!Number.isFinite(now)) {
     throw new Error('Invalid review timestamp.');
   }
+  const db = requireDb();
   const resolvedLimit = resolveQueueLimit(options.limit);
 
   const q = query(
