@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -184,30 +184,58 @@ describe('LearningItemsPanel', () => {
   });
 });
 
-// P3.4 — per-card "加入複習" action.
-describe('LearningItemsPanel — 加入複習', () => {
+// P3.4 / P4.4 — per-card "加入複習" action, driven by a shared reviewedKeys set.
+describe('LearningItemsPanel — 加入複習 / 已加入複習', () => {
+  const KEY = 'vocab|改善|かいぜん';
+
+  // A stateful wrapper that mimics app/page.tsx: it holds `reviewedKeys` and,
+  // on a successful add, records the item's lexicalKey (mirroring
+  // `handleAddToReview`).
   function mount(
     state: LearningItemsFeedState,
-    onAddToReview: (item: LearningItem) => Promise<unknown>
+    opts: {
+      onAddToReview?: (item: LearningItem) => Promise<unknown>;
+      initialReviewedKeys?: string[];
+      reviewKeysLoading?: boolean;
+      reviewKeysError?: boolean;
+    } = {}
   ) {
     const container = document.createElement('div');
     const root = createRoot(container);
+    const onAdd =
+      opts.onAddToReview ?? ((it: LearningItem) => Promise.resolve(it));
+
+    function Harness() {
+      const [reviewedKeys, setReviewedKeys] = useState<ReadonlySet<string>>(
+        () => new Set(opts.initialReviewedKeys ?? [])
+      );
+      const handleAdd = async (it: LearningItem) => {
+        const r = await onAdd(it);
+        setReviewedKeys((prev) => new Set(prev).add(it.lexicalKey));
+        return r;
+      };
+      return (
+        <LearningItemsPanel
+          state={state}
+          onLoadMore={() => {}}
+          onAddToReview={handleAdd}
+          reviewedKeys={reviewedKeys}
+          reviewKeysLoading={opts.reviewKeysLoading}
+          reviewKeysError={opts.reviewKeysError}
+        />
+      );
+    }
+
     const addButtons = () =>
-      [...container.querySelectorAll('button')].filter((b) =>
-        b.textContent?.startsWith('加入複習')
+      [...container.querySelectorAll('button')].filter(
+        (b) => b.textContent === '加入複習'
       );
     return {
       container,
       addButtons,
       async render() {
         await act(async () => {
-          root.render(
-            <LearningItemsPanel
-              state={state}
-              onLoadMore={() => {}}
-              onAddToReview={onAddToReview}
-            />
-          );
+          root.render(<Harness />);
         });
       },
       async clickAdd(index: number) {
@@ -219,28 +247,62 @@ describe('LearningItemsPanel — 加入複習', () => {
       text() {
         return container.textContent ?? '';
       },
+      doneCount() {
+        return (container.textContent?.match(/已加入複習/g) ?? []).length;
+      },
       unmount() {
         act(() => root.unmount());
       },
     };
   }
 
-  const twoItems = ready([item({ id: 'a' }), item({ id: 'b' })], { cursor: null });
+  const twoDup = ready(
+    [item({ id: 'a', lexicalKey: KEY }), item({ id: 'b', lexicalKey: KEY })],
+    { cursor: null }
+  );
 
   beforeEach(() => {
     document.body.innerHTML = '';
   });
 
-  it('renders one 加入複習 button per card', async () => {
-    const m = mount(twoItems, async () => {});
+  it('1/2. a reviewed key renders 已加入複習 and no 加入複習 button', async () => {
+    const m = mount(ready([item({ id: 'a', lexicalKey: KEY })]), {
+      initialReviewedKeys: [KEY],
+    });
+    await m.render();
+    expect(m.text()).toContain('已加入複習');
+    expect(m.addButtons()).toHaveLength(0);
+    m.unmount();
+  });
+
+  it('3. an unreviewed key shows the 加入複習 button', async () => {
+    const m = mount(ready([item({ id: 'a', lexicalKey: KEY })]), {
+      initialReviewedKeys: [],
+    });
+    await m.render();
+    expect(m.addButtons()).toHaveLength(1);
+    expect(m.text()).not.toContain('已加入複習');
+    m.unmount();
+  });
+
+  it('4. duplicate lexicalKey + reviewed → both cards show 已加入複習', async () => {
+    const m = mount(twoDup, { initialReviewedKeys: [KEY] });
+    await m.render();
+    expect(m.doneCount()).toBe(2);
+    expect(m.addButtons()).toHaveLength(0);
+    m.unmount();
+  });
+
+  it('5. duplicate lexicalKey + unreviewed → both cards show the button', async () => {
+    const m = mount(twoDup, { initialReviewedKeys: [] });
     await m.render();
     expect(m.addButtons()).toHaveLength(2);
     m.unmount();
   });
 
-  it('clicking calls materializeReviewCard with that exact item', async () => {
-    const onAdd = vi.fn((item: LearningItem) => Promise.resolve(item));
-    const m = mount(twoItems, onAdd);
+  it('6. a successful add invokes the callback with that exact item', async () => {
+    const onAdd = vi.fn((it: LearningItem) => Promise.resolve(it));
+    const m = mount(twoDup, { onAddToReview: onAdd });
     await m.render();
     await m.clickAdd(1);
     expect(onAdd).toHaveBeenCalledTimes(1);
@@ -248,16 +310,26 @@ describe('LearningItemsPanel — 加入複習', () => {
     m.unmount();
   });
 
-  it('disables only the clicked card\'s button while its request is pending', async () => {
-    let resolve!: () => void;
-    const onAdd = vi.fn(() => new Promise<void>((r) => (resolve = r)));
-    const m = mount(twoItems, onAdd);
+  it('7/8. clicking ONE duplicate flips BOTH occurrences to 已加入複習 (no reload)', async () => {
+    const m = mount(twoDup, {});
     await m.render();
+    expect(m.addButtons()).toHaveLength(2);
+
     await m.clickAdd(0);
 
-    const [b0, b1] = m.addButtons();
-    expect(b0.disabled).toBe(true);
-    expect(b1.disabled).toBe(false);
+    expect(m.addButtons()).toHaveLength(0);
+    expect(m.doneCount()).toBe(2);
+    m.unmount();
+  });
+
+  it('11. an add in flight disables EVERY button for that lexicalKey', async () => {
+    let resolve!: () => void;
+    const onAdd = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    const m = mount(twoDup, { onAddToReview: onAdd });
+    await m.render();
+
+    await m.clickAdd(0);
+    expect(m.addButtons().every((b) => b.disabled)).toBe(true);
 
     await act(async () => {
       resolve();
@@ -265,37 +337,77 @@ describe('LearningItemsPanel — 加入複習', () => {
     m.unmount();
   });
 
-  it('shows 已加入複習 after a successful add', async () => {
-    const m = mount(twoItems, async () => {});
+  it('a pending add for a DIFFERENT key does not disable this key\'s button', async () => {
+    let resolve!: () => void;
+    const onAdd = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    const m = mount(
+      ready(
+        [
+          item({ id: 'a', lexicalKey: 'vocab|改善|' }),
+          item({ id: 'b', lexicalKey: 'vocab|問題|' }),
+        ],
+        { cursor: null }
+      ),
+      { onAddToReview: onAdd }
+    );
     await m.render();
     await m.clickAdd(0);
-    expect(m.text()).toContain('已加入複習');
+    const btns = m.addButtons();
+    expect(btns[0].disabled).toBe(true);
+    expect(btns[1].disabled).toBe(false);
+    await act(async () => {
+      resolve();
+    });
     m.unmount();
   });
 
-  it('shows a generic failure hint and allows retry after a failed add', async () => {
+  it('9/10. a failed add does not mark reviewed and can be retried', async () => {
     const onAdd = vi
       .fn()
       .mockRejectedValueOnce(new Error('permission-denied'))
       .mockResolvedValueOnce(undefined);
-    const m = mount(twoItems, onAdd);
+    const m = mount(twoDup, { onAddToReview: onAdd });
     await m.render();
 
     await m.clickAdd(0);
     expect(m.text()).toContain('加入失敗，請再試一次');
     expect(m.text()).not.toMatch(/permission-denied/);
+    expect(m.text()).not.toContain('已加入複習');
+    expect(m.addButtons()).toHaveLength(2);
 
     await m.clickAdd(0); // retry
     expect(onAdd).toHaveBeenCalledTimes(2);
-    expect(m.text()).toContain('已加入複習');
+    expect(m.doneCount()).toBe(2);
     m.unmount();
   });
 
-  it('does not introduce edit / delete / bulk-add controls', async () => {
-    const m = mount(twoItems, async () => {});
+  it('§7: hides add controls while reviewedKeys is loading (content still renders)', async () => {
+    const m = mount(ready([item({ id: 'a', lexicalKey: KEY })]), {
+      reviewKeysLoading: true,
+    });
+    await m.render();
+    expect(m.addButtons()).toHaveLength(0);
+    expect(m.text()).not.toContain('已加入複習');
+    expect(m.text()).toContain('使變得更好'); // the item content is still shown
+    m.unmount();
+  });
+
+  it('§7: on reviewedKeys load failure, shows the button + a generic warning', async () => {
+    const m = mount(ready([item({ id: 'a', lexicalKey: KEY })]), {
+      reviewKeysError: true,
+    });
+    await m.render();
+    expect(m.text()).toContain('無法載入複習狀態');
+    expect(m.addButtons()).toHaveLength(1);
+    m.unmount();
+  });
+
+  it('13. introduces no edit / delete / bulk-add controls', async () => {
+    const m = mount(twoDup, {});
     await m.render();
     expect(m.text()).not.toContain('刪除');
     expect(m.text()).not.toContain('編輯');
     expect(m.text()).not.toContain('全部加入');
+    m.unmount();
   });
 });

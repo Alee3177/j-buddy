@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   // last query() call's collection path + constraints, for assertions
   lastQuery: null as { path: string; constraints: Constraint[] } | null,
   getDocsCalls: 0,
+  lastGetDocsPath: null as string | null,
 }));
 
 vi.mock('@/lib/firebase', () => ({
@@ -52,14 +53,17 @@ vi.mock('firebase/firestore', () => ({
     h.lastQuery = { path: source.path, constraints };
     return { path: source.path, constraints };
   },
-  getDocs: async (q: { path: string; constraints: Constraint[] }) => {
+  // `getDocs` accepts a Query (from `query()`, has `constraints`) OR a bare
+  // CollectionReference (from `collection()`, no `constraints`).
+  getDocs: async (q: { path: string; constraints?: Constraint[] }) => {
     h.getDocsCalls += 1;
+    h.lastGetDocsPath = q.path;
     const prefix = `${q.path}/`;
     let rows = [...h.store.entries()]
       .filter(([key]) => key.startsWith(prefix))
       .map(([key, data]) => ({ id: key.slice(prefix.length), data }));
 
-    for (const c of q.constraints) {
+    for (const c of q.constraints ?? []) {
       if (c.kind === 'where' && c.field === 'dueAt' && c.op === '<=') {
         rows = rows.filter((r) => (r.data.dueAt as number) <= (c.value as number));
       } else if (c.kind === 'orderBy' && c.field === 'dueAt') {
@@ -118,6 +122,7 @@ vi.mock('firebase/firestore', () => ({
 import {
   applyReviewRating,
   listDueReviewCards,
+  listReviewCardKeys,
   materializeReviewCard,
 } from './reviewService';
 import { REVIEW_QUEUE_CAP } from '@/lib/reviewCard';
@@ -157,6 +162,7 @@ beforeEach(() => {
   h.writes.length = 0;
   h.lastQuery = null;
   h.getDocsCalls = 0;
+  h.lastGetDocsPath = null;
 });
 
 describe('materializeReviewCard', () => {
@@ -552,5 +558,93 @@ describe('listDueReviewCards (P3.3 due-review queue)', () => {
     });
     const { cards } = await listDueReviewCards({ now: NOW });
     expect(cards[0].id).toBe(cardId);
+  });
+});
+
+describe('listReviewCardKeys (P4.4 已加入複習 state)', () => {
+  function seedKey(uid: string, docId: string, data: Record<string, unknown>) {
+    h.store.set(`users/${uid}/review_cards/${docId}`, data);
+  }
+
+  it('1. rejects an unauthenticated caller before any Firestore call', async () => {
+    await expect(listReviewCardKeys()).rejects.toThrow(/signed in/i);
+    expect(h.getDocsCalls).toBe(0);
+  });
+
+  it('2/3/4/5/6. reads exactly users/{auth.uid}/review_cards — no root, no shared, no filter', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'c1', { lexicalKey: 'vocab|改善|かいぜん' });
+    // @ts-expect-error no userId option exists
+    await listReviewCardKeys({ userId: 'victim' });
+    expect(h.lastGetDocsPath).toBe('users/alice/review_cards');
+    expect(h.lastGetDocsPath).not.toMatch(/^review_cards/);
+    expect(h.lastGetDocsPath).not.toMatch(/shared_/);
+    // no where / orderBy / limit was built
+    expect(h.lastQuery).toBeNull();
+  });
+
+  it('7. returns every valid non-empty lexicalKey', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'c1', { lexicalKey: 'vocab|改善|かいぜん' });
+    seedKey('alice', 'c2', { lexicalKey: 'grammar|〜ても|' });
+    seedKey('alice', 'c3', { lexicalKey: 'vocab|問題|もんだい' });
+
+    const keys = await listReviewCardKeys();
+    expect(keys).toBeInstanceOf(Set);
+    expect([...keys].sort()).toEqual(
+      ['grammar|〜ても|', 'vocab|問題|もんだい', 'vocab|改善|かいぜん'].sort()
+    );
+  });
+
+  it('8. skips docs with a missing / non-string / empty lexicalKey', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'ok', { lexicalKey: 'vocab|良い|よい' });
+    seedKey('alice', 'missing', { surface: 'x' });
+    seedKey('alice', 'empty', { lexicalKey: '' });
+    seedKey('alice', 'number', { lexicalKey: 123 });
+    seedKey('alice', 'null', { lexicalKey: null });
+
+    const keys = await listReviewCardKeys();
+    expect([...keys]).toEqual(['vocab|良い|よい']);
+  });
+
+  it('9. duplicate lexicalKey values collapse in the Set', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'c1', { lexicalKey: 'vocab|改善|かいぜん' });
+    seedKey('alice', 'c2', { lexicalKey: 'vocab|改善|かいぜん' }); // impossible in prod, defensive
+    const keys = await listReviewCardKeys();
+    expect(keys.size).toBe(1);
+  });
+
+  it('10. an empty collection returns an empty Set', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    const keys = await listReviewCardKeys();
+    expect(keys.size).toBe(0);
+  });
+
+  it('11. issues no write / transaction', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'c1', { lexicalKey: 'vocab|x|' });
+    await listReviewCardKeys();
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('12/13. returns the COMPLETE key set even with far more than 50 cards (no cap)', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    for (let i = 0; i < 137; i += 1) {
+      seedKey('alice', `c${i}`, { lexicalKey: `vocab|w${i}|` });
+    }
+    const keys = await listReviewCardKeys();
+    expect(keys.size).toBe(137);
+    // no limit constraint was applied
+    expect(h.lastQuery).toBeNull();
+  });
+
+  it('does not read another user\'s review_cards', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedKey('alice', 'a1', { lexicalKey: 'vocab|alice|' });
+    seedKey('mallory', 'm1', { lexicalKey: 'vocab|mallory|' });
+    const keys = await listReviewCardKeys();
+    expect([...keys]).toEqual(['vocab|alice|']);
   });
 });

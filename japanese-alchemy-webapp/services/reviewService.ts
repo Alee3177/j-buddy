@@ -216,3 +216,33 @@ export async function listDueReviewCards(
   }
   return { cards };
 }
+
+/**
+ * Every `lexicalKey` that already has a review card for the signed-in user.
+ *
+ * Drives the "已加入複習" state in the 學習項目 tab (P4.4). Read-only, no filter,
+ * no order, no cursor, **no limit** — the set must stay correct no matter how
+ * many review cards exist (unlike the due queue, this is not a paged view). Each
+ * card doc is small; a full-collection scan on dashboard load is acceptable for
+ * v0.4 (see the P4.4 performance note). Docs with a missing / non-string /
+ * empty `lexicalKey` are skipped; duplicates collapse in the returned Set.
+ *
+ * @throws if there is no authenticated user (no Firestore query is issued).
+ */
+export async function listReviewCardKeys(): Promise<Set<string>> {
+  const uid = requireUid('review');
+  const db = requireDb();
+
+  const snapshot = await getDocs(
+    collection(doc(db, 'users', uid), REVIEW_CARDS_SUBCOLLECTION)
+  );
+
+  const keys = new Set<string>();
+  for (const d of snapshot.docs) {
+    const lexicalKey = (d.data() as Record<string, unknown>).lexicalKey;
+    if (typeof lexicalKey === 'string' && lexicalKey.length > 0) {
+      keys.add(lexicalKey);
+    }
+  }
+  return keys;
+}

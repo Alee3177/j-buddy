@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -19,9 +19,10 @@ import {
 import { useLearningItemsFeed } from '@/lib/learningItemsFeed';
 import { LearningItemsPanel } from '@/components/LearningItemsPanel';
 import { useReviewSession } from '@/lib/reviewSession';
+import { useReviewCardKeys } from '@/lib/reviewCardKeys';
 import { ReviewPanel } from '@/components/ReviewPanel';
 import { materializeReviewCard } from '@/services/reviewService';
-import { Vocabulary, Grammar, AnalysisPage } from '@/types';
+import { Vocabulary, Grammar, AnalysisPage, LearningItem } from '@/types';
 import { 
   parseFurigana, 
   renderVocabularyDetail,
@@ -90,6 +91,20 @@ export default function Dashboard() {
 
   // Japanese Reader v0.4 P3.4 — due-review session for the "複習" tab.
   const reviewSession = useReviewSession(user?.uid ?? null, !loading);
+
+  // Japanese Reader v0.4 P4.4 — persistent "已加入複習" state for the 學習項目 tab.
+  const reviewCardKeys = useReviewCardKeys(user?.uid ?? null, !loading);
+
+  const { addKey: addReviewedKey } = reviewCardKeys;
+  const handleAddToReview = useCallback(
+    async (item: LearningItem) => {
+      const card = await materializeReviewCard(item);
+      // Optimistically flip every occurrence of this lexicalKey to 已加入複習.
+      addReviewedKey(item.lexicalKey);
+      return card;
+    },
+    [addReviewedKey]
+  );
 
   useEffect(() => {
     let loadingData = true;
@@ -388,7 +403,10 @@ export default function Dashboard() {
               <LearningItemsPanel
                 state={learningFeed}
                 onLoadMore={loadMoreLearningItems}
-                onAddToReview={materializeReviewCard}
+                onAddToReview={handleAddToReview}
+                reviewedKeys={reviewCardKeys.keys}
+                reviewKeysLoading={reviewCardKeys.loading}
+                reviewKeysError={reviewCardKeys.error}
               />
             </TabsContent>
           )}

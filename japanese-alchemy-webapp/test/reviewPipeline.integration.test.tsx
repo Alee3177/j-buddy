@@ -50,12 +50,12 @@ vi.mock('firebase/firestore', () => ({
   orderBy: (field: string, dir: 'asc' | 'desc' = 'asc'): Constraint => ({ kind: 'orderBy', field, dir }),
   limit: (n: number): Constraint => ({ kind: 'limit', n }),
   query: (source: { path: string }, ...constraints: Constraint[]) => ({ path: source.path, constraints }),
-  getDocs: async (q: { path: string; constraints: Constraint[] }) => {
+  getDocs: async (q: { path: string; constraints?: Constraint[] }) => {
     const prefix = `${q.path}/`;
     let rows = [...h.store.entries()]
       .filter(([k]) => k.startsWith(prefix))
       .map(([k, data]) => ({ id: k.slice(prefix.length), data }));
-    for (const c of q.constraints) {
+    for (const c of q.constraints ?? []) {
       if (c.kind === 'where' && c.field === 'dueAt' && c.op === '<=') {
         rows = rows.filter((r) => (r.data.dueAt as number) <= (c.value as number));
       } else if (c.kind === 'orderBy' && c.field === 'dueAt') {
@@ -100,6 +100,10 @@ import {
   materializeReviewCard,
 } from '@/services/reviewService';
 import { useReviewSession, type ReviewSession } from '@/lib/reviewSession';
+import { useReviewCardKeys } from '@/lib/reviewCardKeys';
+import { LearningItemsPanel } from '@/components/LearningItemsPanel';
+import type { LearningItem } from '@/types';
+import type { LearningItemsFeedState } from '@/lib/learningItemsFeed';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -239,5 +243,118 @@ describe('P3.4 · review pipeline', () => {
     // in reviewCard.test.ts; here we only need "moved past `now`, hence excluded")
     expect(storedCards().every((c) => c.state === 'review' && c.dueAt > now)).toBe(true);
     h2.unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4.4 · persistent 已加入複習 state in the 學習項目 tab
+// ---------------------------------------------------------------------------
+
+const KAIZEN = 'vocab|改善|かいぜん';
+const MONDAI = 'vocab|問題|もんだい';
+
+function learningItems(now: number): LearningItem[] {
+  return withIds(derive(now)) as unknown as LearningItem[];
+}
+
+function mountLearningPanel(items: LearningItem[]) {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+
+  function Harness() {
+    const reviewKeys = useReviewCardKeys('alice', true);
+    const feedState: LearningItemsFeedState = {
+      phase: 'ready',
+      items,
+      cursor: null,
+      loadingMore: false,
+      loadMoreFailed: false,
+    };
+    return (
+      <LearningItemsPanel
+        state={feedState}
+        onLoadMore={() => {}}
+        onAddToReview={async (item) => {
+          const card = await materializeReviewCard(item);
+          reviewKeys.addKey(item.lexicalKey);
+          return card;
+        }}
+        reviewedKeys={reviewKeys.keys}
+        reviewKeysLoading={reviewKeys.loading}
+        reviewKeysError={reviewKeys.error}
+      />
+    );
+  }
+
+  return {
+    container,
+    async mount() {
+      await act(async () => root.render(<Harness />));
+      await act(async () => {});
+    },
+    addButtons() {
+      return [...container.querySelectorAll('button')].filter(
+        (b) => b.textContent === '加入複習'
+      );
+    },
+    doneCount() {
+      return (container.textContent?.match(/已加入複習/g) ?? []).length;
+    },
+    async clickAdd(index: number) {
+      const btn = this.addButtons()[index];
+      await act(async () => btn.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await act(async () => {});
+    },
+    unmount() {
+      act(() => root.unmount());
+    },
+  };
+}
+
+describe('P4.4 · 已加入複習 persistence + duplicate occurrences', () => {
+  it('an existing review card renders 已加入複習 on every occurrence of its lexicalKey', async () => {
+    const now = 3_000_000;
+    const items = learningItems(now);
+    // pre-existing review card for 問題 only
+    const mondaiItem = items.find((i) => i.lexicalKey === MONDAI)!;
+    await materializeReviewCard(mondaiItem, { now });
+
+    const panel = mountLearningPanel(items);
+    await panel.mount();
+
+    // 問題 → 已加入複習; 改善 (×2) + 〜ても still have buttons
+    expect(panel.doneCount()).toBe(1);
+    expect(panel.addButtons()).toHaveLength(3);
+    panel.unmount();
+  });
+
+  it('clicking ONE 改善 occurrence flips BOTH to 已加入複習 without reload, and it survives a reload', async () => {
+    const now = 4_000_000;
+    const items = learningItems(now);
+    expect(items.filter((i) => i.lexicalKey === KAIZEN)).toHaveLength(2);
+
+    const panel = mountLearningPanel(items);
+    await panel.mount();
+    expect(panel.doneCount()).toBe(0);
+    expect(panel.addButtons()).toHaveLength(4);
+
+    // click the FIRST 改善 button (buttons are in item order: 改善, 改善, 問題, 〜ても)
+    await panel.clickAdd(0);
+
+    // both 改善 occurrences now show 已加入複習; 問題 + 〜ても still clickable
+    expect(panel.doneCount()).toBe(2);
+    expect(panel.addButtons()).toHaveLength(2);
+    // exactly one review card was written (idempotent identity)
+    expect(
+      [...h.store.keys()].filter((k) => k.startsWith('users/alice/review_cards/'))
+    ).toHaveLength(1);
+    panel.unmount();
+
+    // "reload": a fresh hook re-reads the persisted fake Firestore
+    const reloaded = mountLearningPanel(learningItems(now));
+    await reloaded.mount();
+    expect(reloaded.doneCount()).toBe(2); // both 改善 restored from Firestore
+    expect(reloaded.addButtons()).toHaveLength(2);
+    reloaded.unmount();
   });
 });

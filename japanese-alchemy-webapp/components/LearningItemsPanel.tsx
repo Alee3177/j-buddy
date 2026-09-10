@@ -1,14 +1,18 @@
 'use client';
 
 /**
- * Japanese Reader v0.4 P2.2 — read-only presentation for the "學習項目" tab.
+ * Japanese Reader v0.4 — read-only presentation for the "學習項目" tab.
  *
- * Pure function of props: all state lives in `useLearningItemsFeed`
- * (lib/learningItemsFeed.ts). Renders raw saved occurrences newest-first, one
- * card each — no grouping, no edit/delete, no filter/search. Only fields that
- * actually exist on `LearningItem` are shown; nothing is recomputed.
+ * P2.2: renders raw saved occurrences newest-first, one card each — no grouping,
+ * no edit/delete, no filter/search.
+ * P3.4: an optional per-card "加入複習" action.
+ * P4.4: "已加入複習" state is driven by `reviewedKeys` (the set of lexicalKeys
+ * that already have a review card), so every duplicate occurrence of the same
+ * word shows the same state and it survives a reload. Add-in-flight state is
+ * tracked per `lexicalKey`, so clicking one 改善 card disables every 改善 button.
  */
 
+import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -19,58 +23,15 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { parseFurigana, safeExternalUrl } from '@/lib/textUtils';
-import { useState } from 'react';
 import type { LearningItem } from '@/types';
 import type { LearningItemsFeedState } from '@/lib/learningItemsFeed';
 
-type AddToReviewStatus = 'idle' | 'pending' | 'done' | 'error';
-
-function AddToReviewButton({
-  item,
-  onAddToReview,
-}: {
-  item: LearningItem;
-  onAddToReview: (item: LearningItem) => Promise<unknown>;
-}) {
-  const [status, setStatus] = useState<AddToReviewStatus>('idle');
-
-  if (status === 'done') {
-    return <span className="text-xs text-muted-foreground">已加入複習</span>;
-  }
-
-  const handleClick = async () => {
-    setStatus('pending');
-    try {
-      await onAddToReview(item);
-      setStatus('done');
-    } catch {
-      setStatus('error');
-    }
-  };
-
-  return (
-    <span className="flex items-center gap-2">
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={status === 'pending'}
-        onClick={handleClick}
-      >
-        加入複習
-      </Button>
-      {status === 'error' && (
-        <span className="text-xs text-gray-500">加入失敗，請再試一次</span>
-      )}
-    </span>
-  );
-}
-
 function LearningItemCard({
   item,
-  onAddToReview,
+  addControl,
 }: {
   item: LearningItem;
-  onAddToReview?: (item: LearningItem) => Promise<unknown>;
+  addControl: ReactNode;
 }) {
   const sourceUrl = safeExternalUrl(item.sourceUrl);
 
@@ -115,11 +76,7 @@ function LearningItemCard({
             }}
           />
         )}
-        {onAddToReview && (
-          <div className="pt-2">
-            <AddToReviewButton item={item} onAddToReview={onAddToReview} />
-          </div>
-        )}
+        {addControl && <div className="pt-2">{addControl}</div>}
       </CardContent>
     </Card>
   );
@@ -129,11 +86,56 @@ export function LearningItemsPanel({
   state,
   onLoadMore,
   onAddToReview,
+  reviewedKeys,
+  reviewKeysLoading = false,
+  reviewKeysError = false,
 }: {
   state: LearningItemsFeedState;
   onLoadMore: () => void;
   onAddToReview?: (item: LearningItem) => Promise<unknown>;
+  /** lexicalKeys that already have a review card (P4.4) */
+  reviewedKeys?: ReadonlySet<string>;
+  /** the reviewed-key set is still loading — hide add controls until it resolves */
+  reviewKeysLoading?: boolean;
+  /** the reviewed-key set failed to load — show add controls anyway (idempotent) */
+  reviewKeysError?: boolean;
 }) {
+  // Add requests in flight, keyed by lexicalKey — one 改善 click disables every
+  // 改善 button. `failedKeys` tracks the most recent per-key failure for a hint.
+  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  );
+  const [failedKeys, setFailedKeys] = useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  );
+
+  const handleAdd = useCallback(
+    async (item: LearningItem) => {
+      if (!onAddToReview) return;
+      const key = item.lexicalKey;
+      setPendingKeys((prev) => new Set(prev).add(key));
+      setFailedKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      try {
+        await onAddToReview(item);
+        // On success the parent adds `key` to `reviewedKeys`; the cards then
+        // re-render as 已加入複習 on their own.
+      } catch {
+        setFailedKeys((prev) => new Set(prev).add(key));
+      } finally {
+        setPendingKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [onAddToReview]
+  );
+
   if (state.phase === 'loading') {
     return (
       <p className="py-8 text-center text-muted-foreground">載入中...</p>
@@ -160,14 +162,49 @@ export function LearningItemsPanel({
     );
   }
 
+  // Add controls are shown only when a handler is wired AND the reviewed-key
+  // set has resolved (loaded or errored) — never while it is still loading, to
+  // avoid briefly showing 加入複習 on an item that is already in review.
+  const showAddControls = onAddToReview != null && !reviewKeysLoading;
+
+  const addControlFor = (item: LearningItem): ReactNode => {
+    if (!showAddControls) return null;
+    if (reviewedKeys?.has(item.lexicalKey)) {
+      return <span className="text-xs text-muted-foreground">已加入複習</span>;
+    }
+    const pending = pendingKeys.has(item.lexicalKey);
+    const failed = failedKeys.has(item.lexicalKey);
+    return (
+      <span className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={() => void handleAdd(item)}
+        >
+          加入複習
+        </Button>
+        {failed && (
+          <span className="text-xs text-gray-500">加入失敗，請再試一次</span>
+        )}
+      </span>
+    );
+  };
+
   return (
     <div className="space-y-4">
+      {onAddToReview != null && reviewKeysError && (
+        <p className="text-center text-sm text-gray-500">
+          無法載入複習狀態，「加入複習」仍可使用。
+        </p>
+      )}
+
       <div className="grid gap-4">
         {state.items.map((item) => (
           <LearningItemCard
             key={item.id}
             item={item}
-            onAddToReview={onAddToReview}
+            addControl={addControlFor(item)}
           />
         ))}
       </div>
