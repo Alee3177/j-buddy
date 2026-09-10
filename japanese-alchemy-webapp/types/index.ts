@@ -101,3 +101,16 @@ export interface ListLearningItemsResult {
   items: LearningItem[];
   nextCursor: string | null;
 }
+
+// Japanese Reader v0.4 P3.2 — review-card model.
+//
+// The review entity + scheduler live in `lib/reviewCard.ts` (pure, deterministic).
+// These are re-exported here so consumers have one import site for domain types,
+// matching `LearningItem` above. The `RATING` value constant stays in
+// `lib/reviewCard.ts` and is imported from there directly.
+export type {
+  ReviewCard,
+  ReviewCardState,
+  ReviewRating,
+  ReviewSchedulePatch,
+} from '@/lib/reviewCard';
