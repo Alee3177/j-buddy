@@ -10,10 +10,18 @@ import type { LearningItem } from '@/types';
 
 // Hoisted shared state so the vi.mock factories (evaluated during the hoisted
 // imports) see initialised objects. Mutated per test.
+type Constraint =
+  | { kind: 'where'; field: string; op: string; value: unknown }
+  | { kind: 'orderBy'; field: string; dir: 'asc' | 'desc' }
+  | { kind: 'limit'; n: number };
+
 const h = vi.hoisted(() => ({
   auth: { currentUser: null as { uid: string } | null },
   store: new Map<string, Record<string, unknown>>(),
   writes: [] as Array<{ op: 'set' | 'update'; path: string; data: Record<string, unknown> }>,
+  // last query() call's collection path + constraints, for assertions
+  lastQuery: null as { path: string; constraints: Constraint[] } | null,
+  getDocsCalls: 0,
 }));
 
 vi.mock('@/lib/firebase', () => ({
@@ -25,6 +33,49 @@ vi.mock('@/lib/firebase', () => ({
 
 vi.mock('firebase/firestore', () => ({
   doc: (_db: unknown, ...segments: string[]) => ({ path: segments.join('/') }),
+  collection: (parent: { path: string }, name: string) => ({
+    path: `${parent.path}/${name}`,
+  }),
+  where: (field: string, op: string, value: unknown): Constraint => ({
+    kind: 'where',
+    field,
+    op,
+    value,
+  }),
+  orderBy: (field: string, dir: 'asc' | 'desc' = 'asc'): Constraint => ({
+    kind: 'orderBy',
+    field,
+    dir,
+  }),
+  limit: (n: number): Constraint => ({ kind: 'limit', n }),
+  query: (source: { path: string }, ...constraints: Constraint[]) => {
+    h.lastQuery = { path: source.path, constraints };
+    return { path: source.path, constraints };
+  },
+  getDocs: async (q: { path: string; constraints: Constraint[] }) => {
+    h.getDocsCalls += 1;
+    const prefix = `${q.path}/`;
+    let rows = [...h.store.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key, data]) => ({ id: key.slice(prefix.length), data }));
+
+    for (const c of q.constraints) {
+      if (c.kind === 'where' && c.field === 'dueAt' && c.op === '<=') {
+        rows = rows.filter((r) => (r.data.dueAt as number) <= (c.value as number));
+      } else if (c.kind === 'orderBy' && c.field === 'dueAt') {
+        const sign = c.dir === 'desc' ? -1 : 1;
+        rows = [...rows].sort((a, b) => {
+          const byDue = ((a.data.dueAt as number) - (b.data.dueAt as number)) * sign;
+          if (byDue !== 0) return byDue;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // implicit __name__ asc
+        });
+      } else if (c.kind === 'limit') {
+        rows = rows.slice(0, c.n);
+      }
+    }
+
+    return { docs: rows.map((r) => ({ id: r.id, data: () => ({ ...r.data }) })) };
+  },
   runTransaction: async (
     _db: unknown,
     updateFn: (tx: {
@@ -64,7 +115,12 @@ vi.mock('firebase/firestore', () => ({
   },
 }));
 
-import { applyReviewRating, materializeReviewCard } from './reviewService';
+import {
+  applyReviewRating,
+  listDueReviewCards,
+  materializeReviewCard,
+} from './reviewService';
+import { REVIEW_QUEUE_CAP } from '@/lib/reviewCard';
 
 function learningItem(overrides: Partial<LearningItem> = {}): LearningItem {
   return {
@@ -99,6 +155,8 @@ beforeEach(() => {
   h.auth.currentUser = null;
   h.store.clear();
   h.writes.length = 0;
+  h.lastQuery = null;
+  h.getDocsCalls = 0;
 });
 
 describe('materializeReviewCard', () => {
@@ -305,5 +363,194 @@ describe('applyReviewRating', () => {
     await expect(applyReviewRating(CARD_ID, RATING.GOOD, { now: NOW })).rejects.toThrow();
     expect(h.store.has(PATH('alice'))).toBe(false);
     expect(h.writes).toHaveLength(0);
+  });
+});
+
+describe('listDueReviewCards (P3.3 due-review queue)', () => {
+  // Seed a review card at an explicit path + dueAt.
+  function seedAt(uid: string, key: string, dueAt: number, overrides: Partial<ReviewCard> = {}) {
+    const cardId = reviewCardIdFor(key);
+    const base = newReviewCard(learningItem({ lexicalKey: key }), uid, 0);
+    h.store.set(`users/${uid}/review_cards/${cardId}`, {
+      ...base,
+      dueAt,
+      state: 'review',
+      ...overrides,
+    });
+    return cardId;
+  }
+
+  it('1/2. rejects an unauthenticated caller before any Firestore query', async () => {
+    await expect(listDueReviewCards()).rejects.toThrow(/signed in/i);
+    expect(h.getDocsCalls).toBe(0);
+    expect(h.lastQuery).toBeNull();
+  });
+
+  it('20. rejects a non-finite now before any query', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    for (const bad of [Number.NaN, Infinity, -Infinity]) {
+      await expect(listDueReviewCards({ now: bad })).rejects.toThrow(/timestamp/i);
+    }
+    expect(h.getDocsCalls).toBe(0);
+  });
+
+  it('3/5/6. queries exactly users/{auth.uid}/review_cards — not root, not shared', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: NOW });
+    expect(h.lastQuery?.path).toBe('users/alice/review_cards');
+    expect(h.lastQuery?.path).not.toMatch(/^review_cards/);
+    expect(h.lastQuery?.path).not.toMatch(/shared_/);
+  });
+
+  it('4. has no userId option and cannot be pointed at another uid', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    // @ts-expect-error userId is not part of the options contract
+    await listDueReviewCards({ now: NOW, userId: 'victim' });
+    expect(h.lastQuery?.path).toBe('users/alice/review_cards');
+  });
+
+  it('7/8/19. builds where(dueAt <= injected now) + orderBy(dueAt asc)', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: 424242 });
+    const cs = h.lastQuery!.constraints;
+    expect(cs).toContainEqual({ kind: 'where', field: 'dueAt', op: '<=', value: 424242 });
+    expect(cs).toContainEqual({ kind: 'orderBy', field: 'dueAt', dir: 'asc' });
+    expect(cs.filter((c) => c.kind === 'where')).toHaveLength(1);
+    expect(cs.filter((c) => c.kind === 'orderBy')).toHaveLength(1);
+  });
+
+  it('does not filter by type or state, and does not orderBy createdAt / documentId', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: NOW });
+    for (const c of h.lastQuery!.constraints) {
+      if (c.kind === 'where') expect(c.field).toBe('dueAt');
+      if (c.kind === 'orderBy') expect(c.field).toBe('dueAt');
+    }
+  });
+
+  it('9. default limit is REVIEW_QUEUE_CAP (50)', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: NOW });
+    expect(h.lastQuery!.constraints).toContainEqual({ kind: 'limit', n: 50 });
+    expect(REVIEW_QUEUE_CAP).toBe(50);
+  });
+
+  it('10. a limit at or below the cap is respected', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: NOW, limit: 12 });
+    expect(h.lastQuery!.constraints).toContainEqual({ kind: 'limit', n: 12 });
+  });
+
+  it('11. a limit above the cap clamps to 50', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await listDueReviewCards({ now: NOW, limit: 999 });
+    expect(h.lastQuery!.constraints).toContainEqual({ kind: 'limit', n: 50 });
+  });
+
+  it('12. invalid limits fall back to the default (clamp policy, never reject)', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    for (const bad of [0, -3, Number.NaN, Infinity, 0.4]) {
+      h.lastQuery = null;
+      await listDueReviewCards({ now: NOW, limit: bad });
+      expect(h.lastQuery!.constraints).toContainEqual({ kind: 'limit', n: 50 });
+    }
+    // a positive non-integer floors
+    h.lastQuery = null;
+    await listDueReviewCards({ now: NOW, limit: 7.8 });
+    expect(h.lastQuery!.constraints).toContainEqual({ kind: 'limit', n: 7 });
+  });
+
+  it('13. an empty collection returns { cards: [] }', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    await expect(listDueReviewCards({ now: NOW })).resolves.toEqual({ cards: [] });
+  });
+
+  it('14/15. returns only due cards, in backend (dueAt asc) order — future card excluded', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedAt('alice', 'vocab|c|', NOW - 10);
+    seedAt('alice', 'vocab|a|', NOW - 1000);
+    seedAt('alice', 'vocab|b|', NOW); // exactly due
+    seedAt('alice', 'vocab|future|', NOW + 86_400_000); // not due
+
+    const { cards } = await listDueReviewCards({ now: NOW });
+
+    expect(cards.map((c) => c.lexicalKey)).toEqual(['vocab|a|', 'vocab|c|', 'vocab|b|']);
+    expect(cards.every((c) => c.dueAt <= NOW)).toBe(true);
+  });
+
+  it('does not client-side sort or dedup — backend order is preserved verbatim', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedAt('alice', 'vocab|x|', NOW - 5);
+    seedAt('alice', 'vocab|y|', NOW - 50);
+    const { cards } = await listDueReviewCards({ now: NOW });
+    // mock returns dueAt asc; the service must not re-order it
+    expect(cards.map((c) => c.dueAt)).toEqual([NOW - 50, NOW - 5]);
+  });
+
+  it('16. skips a malformed persisted row and keeps the valid ones', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedAt('alice', 'vocab|ok1|', NOW - 100);
+    // malformed rows written directly (dueAt null coerces past the mock's
+    // numeric filter, so toReviewCard's own finite-number guard is exercised)
+    h.store.set('users/alice/review_cards/bad-duedate', {
+      id: 'bad-duedate',
+      dueAt: null,
+      state: 'review',
+      lexicalKey: 'vocab|x|',
+      type: 'vocab',
+    });
+    h.store.set('users/alice/review_cards/bad-state', {
+      id: 'bad-state',
+      dueAt: NOW - 1,
+      state: 'archived',
+      lexicalKey: 'vocab|y|',
+      type: 'vocab',
+    });
+    h.store.set('users/alice/review_cards/bad-type', {
+      id: 'bad-type',
+      dueAt: NOW - 1,
+      state: 'review',
+      lexicalKey: 'vocab|z|',
+      type: 'sentence',
+    });
+    h.store.set('users/alice/review_cards/bad-lexkey', {
+      id: 'bad-lexkey',
+      dueAt: NOW - 1,
+      state: 'review',
+      lexicalKey: '',
+      type: 'vocab',
+    });
+    seedAt('alice', 'vocab|ok2|', NOW - 50);
+
+    const { cards } = await listDueReviewCards({ now: NOW });
+    expect(cards.map((c) => c.lexicalKey)).toEqual(['vocab|ok1|', 'vocab|ok2|']);
+  });
+
+  it('17/18. returns both learning-state and review-state due cards', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedAt('alice', 'vocab|lrn|', NOW - 20, { state: 'learning' });
+    seedAt('alice', 'grammar|rev|', NOW - 10, { state: 'review', type: 'grammar' });
+
+    const { cards } = await listDueReviewCards({ now: NOW });
+    expect(cards.map((c) => c.state)).toEqual(['learning', 'review']);
+    expect(cards.map((c) => c.type)).toEqual(['vocab', 'grammar']);
+  });
+
+  it('21. issues no write / transaction', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    seedAt('alice', 'vocab|a|', NOW - 1);
+    await listDueReviewCards({ now: NOW });
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('overwrites the persisted doc id with the Firestore document id', async () => {
+    h.auth.currentUser = { uid: 'alice' };
+    const cardId = seedAt('alice', 'vocab|idcheck|', NOW - 1);
+    h.store.set(`users/alice/review_cards/${cardId}`, {
+      ...h.store.get(`users/alice/review_cards/${cardId}`)!,
+      id: 'STALE-ID-IN-BODY',
+    });
+    const { cards } = await listDueReviewCards({ now: NOW });
+    expect(cards[0].id).toBe(cardId);
   });
 });

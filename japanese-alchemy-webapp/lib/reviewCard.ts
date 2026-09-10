@@ -39,6 +39,13 @@ export const MIN_INTERVAL_DAYS = 1;
 export const MAX_INTERVAL_DAYS = 3650; // 10 years
 
 /**
+ * P3.3 — hard cap on cards returned by one due-queue fetch. A per-fetch limit
+ * only: NOT a daily quota, no timezone reset, no persistent counter. The queue
+ * is re-fetched when the in-memory batch is exhausted.
+ */
+export const REVIEW_QUEUE_CAP = 50;
+
+/**
  * A persisted review-scheduling record. Lives at
  * `users/{uid}/review_cards/{id}` where `id === reviewCardIdFor(lexicalKey)`.
  * The face / provenance fields are a snapshot taken from the `LearningItem`
