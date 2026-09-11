@@ -46,6 +46,9 @@ jobs:
           # No npm cache: this repo's .gitignore excludes package-lock.json, so
           # there is no lock file to key the cache on.
 
+      - name: Pin npm
+        run: npm install -g npm@11.11.0
+
       - run: npm install --no-audit --no-fund
 
       - name: Unit tests
@@ -80,6 +83,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Pin npm
+        run: npm install -g npm@11.11.0
 
       - name: Install webapp deps (provides @firebase/rules-unit-testing + vitest)
         working-directory: japanese-alchemy-webapp
