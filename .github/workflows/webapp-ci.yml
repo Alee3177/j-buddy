@@ -1,7 +1,7 @@
 name: Webapp CI
 
 # Quality gates for japanese-alchemy-webapp (Japanese Reader) and the
-# review_cards Firestore rules. No Firebase secrets are used — the build works
+# review_cards Firestore rules. No Firebase secrets are used ??? the build works
 # without .env.local (P4.2) and the rules job runs against the local emulator.
 #
 # NOTE: this repo's .gitignore excludes package-lock.json, so `npm ci` is not
@@ -82,7 +82,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Pin npm
         run: npm install -g npm@11.11.0
