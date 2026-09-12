@@ -1,6 +1,30 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { ReactElement, ReactNode } from 'react';
+import NextLink from 'next/link';
 import { EmptyState } from './EmptyState';
+
+// P6.5-E — see components/AppHeader.test.tsx for why this walks the raw
+// element tree instead of asserting on rendered HTML.
+function findLink(
+  node: ReactNode,
+  href: string
+): ReactElement<{ prefetch?: boolean }> | null {
+  if (node == null || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findLink(child, href);
+      if (found) return found;
+    }
+    return null;
+  }
+  const el = node as ReactElement<{ href?: string; children?: ReactNode }>;
+  if (el.type === NextLink && el.props.href === href) {
+    return el as ReactElement<{ prefetch?: boolean }>;
+  }
+  if (el.props?.children) return findLink(el.props.children, href);
+  return null;
+}
 
 describe('EmptyState', () => {
   it('renders the title only when no description or action is given', () => {
@@ -64,5 +88,15 @@ describe('EmptyState', () => {
   it('applies a passed className to the wrapping card', () => {
     const html = renderToStaticMarkup(<EmptyState title="x" className="col-span-full" />);
     expect(html).toMatch(/class="[^"]*col-span-full[^"]*"/);
+  });
+
+  it('disables prefetch on the action link (static-export segment-cache 404 workaround)', () => {
+    const tree = EmptyState({
+      title: '還沒有學習項目',
+      action: { label: '查看如何使用', href: '/how-to-use' },
+    });
+    const link = findLink(tree, '/how-to-use');
+    expect(link).not.toBeNull();
+    expect(link?.props.prefetch).toBe(false);
   });
 });

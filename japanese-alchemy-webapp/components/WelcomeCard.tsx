@@ -32,7 +32,9 @@ export function WelcomeCard() {
           Chrome Extension 與自動儲存功能正在升級整合中，目前暫時無法建立新的學習內容。
         </StatusNotice>
         <Button asChild variant="default" size="sm">
-          <Link href="/how-to-use">查看如何使用</Link>
+          <Link href="/how-to-use" prefetch={false}>
+            查看如何使用
+          </Link>
         </Button>
       </CardContent>
     </Card>

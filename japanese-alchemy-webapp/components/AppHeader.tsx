@@ -17,7 +17,11 @@ export function AppHeader({
       <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
         <h1 className="text-2xl font-bold text-primary">J-Buddy Learn Japanese</h1>
         <div className="flex items-center gap-4">
-          <Link href="/how-to-use" className="text-sm text-primary hover:underline">
+          <Link
+            href="/how-to-use"
+            prefetch={false}
+            className="text-sm text-primary hover:underline"
+          >
             如何使用
           </Link>
           {user ? (

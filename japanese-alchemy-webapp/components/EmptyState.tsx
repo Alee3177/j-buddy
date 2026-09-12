@@ -41,7 +41,9 @@ export function EmptyState({
         {action && (
           <div className="pt-2">
             <Button asChild variant="default" size="sm">
-              <Link href={action.href}>{action.label}</Link>
+              <Link href={action.href} prefetch={false}>
+                {action.label}
+              </Link>
             </Button>
           </div>
         )}
