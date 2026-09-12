@@ -15,9 +15,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-Hant" suppressHydrationWarning>
-      <head>
-        <link rel="stylesheet" href="https://static.line-scdn.net/seed/line-seed/2.0/LineSeedJP_TTF_Rg.css" />
-      </head>
       <body className="antialiased" style={{ fontFamily: '"LINE Seed JP", sans-serif' }}>
         <ThemeProvider>
           <AuthProvider>{children}</AuthProvider>
