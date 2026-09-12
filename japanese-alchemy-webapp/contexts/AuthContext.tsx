@@ -25,15 +25,18 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  // When Firebase is not configured (e.g. a static export built without
-  // `.env.local`) there is nothing to wait for — start already resolved as
-  // signed-out (user null, loading false) so the page prerenders / renders
-  // deterministically. The effect below then does nothing in that mode.
-  const [loading, setLoading] = useState<boolean>(auth !== null);
+  // Always start "loading" regardless of whether Firebase is configured, so
+  // the very first render (SSR and the initial client render before any
+  // effect runs) is identical on server and client. Whether `auth` is
+  // present is only acted on inside the effect below, after hydration.
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
     if (!auth) {
-      // No config: the initial state is already the correct signed-out state.
+      // No config: resolve to the signed-out state on a microtask, so this
+      // still reads as "reacting to an external system" rather than an
+      // unconditional synchronous setState in the effect body.
+      queueMicrotask(() => setLoading(false));
       return;
     }
 

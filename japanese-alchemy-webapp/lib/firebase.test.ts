@@ -1,3 +1,10 @@
+/* @vitest-environment jsdom */
+// jsdom (not the file's previous implicit `node` default) is required so
+// `typeof window !== 'undefined'` can be exercised both ways — the emulator
+// auto-wiring gate below asserts the true "wires when requested" path, which
+// needs a real `window` global. Every pre-existing test in this file is
+// controlled by `app`/`NODE_ENV`, never by `window`, so this switch changes
+// no existing outcome (see the "9." / "8/9." tests below).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Spy on every Firebase SDK entrypoint so no real SDK code runs and we can
@@ -174,6 +181,45 @@ describe('firebase module — full config', () => {
     await loadFirebaseModule();
     expect(connectFirestoreEmulator).not.toHaveBeenCalled();
     expect(connectFunctionsEmulator).not.toHaveBeenCalled();
+  });
+});
+
+describe('emulator auto-wiring gate (NEXT_PUBLIC_USE_FIREBASE_EMULATORS)', () => {
+  const EMULATOR_FLAG = 'NEXT_PUBLIC_USE_FIREBASE_EMULATORS';
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // Regression guard: `next dev` sets NODE_ENV=development on every local run
+  // regardless of intent, so NODE_ENV alone must never be sufficient to wire
+  // emulators — a real-Firebase `npm run dev` (no flag set) must stay on real
+  // Firebase.
+  it('does NOT wire emulators under NODE_ENV=development when the flag is unset', async () => {
+    setFullEnv();
+    vi.stubEnv('NODE_ENV', 'development');
+    delete process.env[EMULATOR_FLAG];
+    await loadFirebaseModule();
+    expect(connectFirestoreEmulator).not.toHaveBeenCalled();
+    expect(connectFunctionsEmulator).not.toHaveBeenCalled();
+  });
+
+  it('does NOT wire emulators when the flag is set to a non-"true" value', async () => {
+    setFullEnv();
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv(EMULATOR_FLAG, 'false');
+    await loadFirebaseModule();
+    expect(connectFirestoreEmulator).not.toHaveBeenCalled();
+    expect(connectFunctionsEmulator).not.toHaveBeenCalled();
+  });
+
+  it('wires emulators under NODE_ENV=development when the flag is "true"', async () => {
+    setFullEnv();
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv(EMULATOR_FLAG, 'true');
+    await loadFirebaseModule();
+    expect(connectFirestoreEmulator).toHaveBeenCalledWith(expect.anything(), 'localhost', 8080);
+    expect(connectFunctionsEmulator).toHaveBeenCalledWith(expect.anything(), 'localhost', 5001);
   });
 });
 
