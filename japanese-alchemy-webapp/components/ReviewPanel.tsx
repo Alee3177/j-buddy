@@ -18,6 +18,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { EmptyState } from '@/components/EmptyState';
 import { parseFurigana, safeExternalUrl } from '@/lib/textUtils';
 import { RATING } from '@/lib/reviewCard';
 import type { ReviewSession } from '@/lib/reviewSession';
@@ -41,11 +42,10 @@ export function ReviewPanel({ session }: { session: ReviewSession }) {
 
   if (!currentCard) {
     return (
-      <Card>
-        <CardContent className="py-8 text-center">
-          <p className="text-gray-500">今天沒有要複習的項目</p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        title="今天沒有要複習的項目"
+        description="先到「學習項目」將想記住的內容加入複習。"
+      />
     );
   }
 

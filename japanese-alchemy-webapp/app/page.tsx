@@ -6,7 +6,10 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ThemeToggle } from '@/components/ui/theme-toggle';
+import { AppHeader } from '@/components/AppHeader';
+import { WelcomeCard } from '@/components/WelcomeCard';
+import { EmptyState } from '@/components/EmptyState';
+import { shouldShowWelcomeCard } from '@/lib/welcomeCard';
 import {
   getUserVocabularies,
   getUserGrammars,
@@ -179,39 +182,26 @@ export default function Dashboard() {
   const allVocabularies = user ? [...vocabularies, ...sharedVocabularies] : sharedVocabularies;
   const allGrammars = user ? [...grammars, ...sharedGrammars] : sharedGrammars;
 
+  const showWelcomeCard = shouldShowWelcomeCard({
+    signedIn: user != null,
+    vocabularyCount: vocabularies.length,
+    grammarCount: grammars.length,
+    pageCount: analysisPages.length,
+    learningItemCount: learningFeed.items.length,
+  });
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted">
-      {/* Header */}
-      <header className="bg-card border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-primary">
-            J-Buddy Learn Japanese
-          </h1>
-          <div className="flex items-center gap-4">
-            {user ? (
-              <>
-                <span className="text-sm text-muted-foreground">
-                  {user.email}
-                </span>
-                <ThemeToggle />
-                <Button onClick={handleSignOut} variant="outline" size="sm">
-                  登出
-                </Button>
-              </>
-            ) : (
-              <>
-                <ThemeToggle />
-                <Button onClick={handleSignIn} variant="default" size="sm">
-                  登入
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-      </header>
+      <AppHeader user={user} onSignIn={handleSignIn} onSignOut={handleSignOut} />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {showWelcomeCard && (
+          <div className="mb-6">
+            <WelcomeCard />
+          </div>
+        )}
+
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList
             className={`grid w-full ${user ? 'max-w-4xl grid-cols-6' : 'max-w-xl grid-cols-3'}`}
@@ -253,11 +243,7 @@ export default function Dashboard() {
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {allVocabularies.length === 0 ? (
-                <Card className="col-span-full">
-                  <CardContent className="py-8 text-center">
-                    <p className="text-gray-500">找不到單字。</p>
-                  </CardContent>
-                </Card>
+                <EmptyState title="找不到單字。" className="col-span-full" />
               ) : (
                 allVocabularies.map((vocab) => (
                   <Card key={vocab.id} className="flex flex-col">
@@ -297,11 +283,7 @@ export default function Dashboard() {
 
             <div className="grid gap-4">
               {allGrammars.length === 0 ? (
-                <Card>
-                  <CardContent className="py-8 text-center">
-                    <p className="text-gray-500">找不到文法重點。</p>
-                  </CardContent>
-                </Card>
+                <EmptyState title="找不到文法重點。" />
               ) : (
                 allGrammars.map((grammar) => (
                   <Card key={grammar.id}>
@@ -342,11 +324,7 @@ export default function Dashboard() {
 
               <div className="grid gap-4">
                 {analysisPages.length === 0 ? (
-                  <Card>
-                    <CardContent className="py-8 text-center">
-                      <p className="text-gray-500">找不到分析頁面。</p>
-                    </CardContent>
-                  </Card>
+                  <EmptyState title="找不到分析頁面。" />
                 ) : (
                   analysisPages.map((page) => {
                     const sourceUrl = safeSourceUrl(page.source_url);
@@ -434,11 +412,7 @@ export default function Dashboard() {
 
             <div className="grid gap-4">
               {sharedAnalysisPages.length === 0 ? (
-                <Card>
-                  <CardContent className="py-8 text-center">
-                    <p className="text-gray-500">找不到共享分析頁面。</p>
-                  </CardContent>
-                </Card>
+                <EmptyState title="找不到共享分析頁面。" />
               ) : (
                 sharedAnalysisPages.map((page) => {
                   const sourceUrl = safeSourceUrl(page.source_url);

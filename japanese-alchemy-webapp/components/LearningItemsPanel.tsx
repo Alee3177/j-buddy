@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/EmptyState';
 import { parseFurigana, safeExternalUrl } from '@/lib/textUtils';
 import type { LearningItem } from '@/types';
 import type { LearningItemsFeedState } from '@/lib/learningItemsFeed';
@@ -154,11 +155,12 @@ export function LearningItemsPanel({
 
   if (state.items.length === 0) {
     return (
-      <Card>
-        <CardContent className="py-8 text-center">
-          <p className="text-gray-500">尚無學習項目</p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        title="還沒有學習項目"
+        description={<p>儲存日文分析內容後，單字與文法會出現在這裡。</p>}
+        notice={{ body: 'Chrome Extension 整合功能目前正在準備中。' }}
+        action={{ label: '查看如何使用', href: '/how-to-use' }}
+      />
     );
   }
 

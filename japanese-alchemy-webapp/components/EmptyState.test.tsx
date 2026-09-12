@@ -1,0 +1,68 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { EmptyState } from './EmptyState';
+
+describe('EmptyState', () => {
+  it('renders the title only when no description or action is given', () => {
+    const html = renderToStaticMarkup(<EmptyState title="找不到單字。" />);
+    expect(html).toContain('找不到單字。');
+    expect(html).not.toContain('<a');
+  });
+
+  it('renders a description node', () => {
+    const html = renderToStaticMarkup(
+      <EmptyState
+        title="還沒有學習項目"
+        description={<p>儲存日文分析內容後，單字與文法會出現在這裡。</p>}
+      />
+    );
+    expect(html).toContain('儲存日文分析內容後，單字與文法會出現在這裡。');
+  });
+
+  it('renders an action as a primary-styled link to the given href', () => {
+    const html = renderToStaticMarkup(
+      <EmptyState
+        title="還沒有學習項目"
+        action={{ label: '查看如何使用', href: '/how-to-use' }}
+      />
+    );
+    expect(html).toContain('href="/how-to-use"');
+    expect(html).toContain('查看如何使用');
+    const anchor = html.match(/<a[^>]*href="\/how-to-use"[^>]*>/)?.[0] ?? '';
+    expect(anchor).toContain('data-variant="default"');
+  });
+
+  it('renders a distinct status notice with title and body', () => {
+    const html = renderToStaticMarkup(
+      <EmptyState
+        title="還沒有學習項目"
+        notice={{
+          title: '目前功能狀態',
+          body: 'Chrome Extension 整合功能目前正在準備中。',
+        }}
+      />
+    );
+    expect(html).toContain('目前功能狀態');
+    expect(html).toContain('Chrome Extension 整合功能目前正在準備中。');
+  });
+
+  it('renders a title-less status notice', () => {
+    const html = renderToStaticMarkup(
+      <EmptyState
+        title="還沒有學習項目"
+        notice={{ body: 'Chrome Extension 整合功能目前正在準備中。' }}
+      />
+    );
+    expect(html).toContain('Chrome Extension 整合功能目前正在準備中。');
+  });
+
+  it('renders no action link when none is given', () => {
+    const html = renderToStaticMarkup(<EmptyState title="今天沒有要複習的項目" />);
+    expect(html).not.toContain('<a');
+  });
+
+  it('applies a passed className to the wrapping card', () => {
+    const html = renderToStaticMarkup(<EmptyState title="x" className="col-span-full" />);
+    expect(html).toMatch(/class="[^"]*col-span-full[^"]*"/);
+  });
+});

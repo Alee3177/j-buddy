@@ -75,9 +75,14 @@ describe('ReviewPanel — states', () => {
   });
 
   it('2. empty text when there is no current card', () => {
-    expect(render(session({ phase: 'ready', cards: [] })).text).toContain(
-      '今天沒有要複習的項目'
-    );
+    const r = render(session({ phase: 'ready', cards: [] }));
+    expect(r.text).toContain('今天沒有要複習的項目');
+    expect(r.text).toContain('先到「學習項目」將想記住的內容加入複習。');
+  });
+
+  it('2b. renders no CTA link in the empty state', () => {
+    const r = render(session({ phase: 'ready', cards: [] }));
+    expect(r.html).not.toContain('<a');
   });
 
   it('3. initial-load error without leaking Firebase details', () => {

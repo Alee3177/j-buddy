@@ -66,9 +66,22 @@ describe('LearningItemsPanel', () => {
     expect(html).not.toMatch(/firestore|firebase|permission-denied/i);
   });
 
-  it('renders the empty state', () => {
+  it('renders the empty state title and lead line', () => {
     const html = render(ready([]));
-    expect(html).toContain('尚無學習項目');
+    expect(html).toContain('還沒有學習項目');
+    expect(html).toContain('儲存日文分析內容後，單字與文法會出現在這裡。');
+  });
+
+  it('renders the extension status as a distinct notice (P6.5-C)', () => {
+    const html = render(ready([]));
+    expect(html).toContain('Chrome Extension 整合功能目前正在準備中。');
+  });
+
+  it('renders a primary-styled 查看如何使用 CTA linking to /how-to-use', () => {
+    const html = render(ready([]));
+    expect(html).toContain('查看如何使用');
+    const anchor = html.match(/<a[^>]*href="\/how-to-use"[^>]*>/)?.[0] ?? '';
+    expect(anchor).toContain('data-variant="default"');
   });
 
   it('renders a vocabulary occurrence with type badge, reading and meaning', () => {

@@ -316,7 +316,7 @@ describe('P2.3 · learning-items pipeline (save → read → paginate → render
     const html = renderToStaticMarkup(
       <LearningItemsPanel state={state} onLoadMore={() => {}} />
     );
-    expect(html).toContain('尚無學習項目');
+    expect(html).toContain('還沒有學習項目');
   });
 
   it('rejects a read for a different uid than the fake auth user (rules-equivalent)', async () => {
