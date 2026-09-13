@@ -20,14 +20,13 @@ const mockGetFunctions = jest.fn();
 jest.mock('firebase/app', () => ({
   initializeApp: (...args) => mockInitializeApp(...args),
 }));
-jest.mock('firebase/auth', () => ({
+jest.mock('firebase/auth/web-extension', () => ({
   getAuth: (...args) => mockGetAuth(...args),
   signInWithCredential: jest.fn(),
+  onAuthStateChanged: jest.fn(),
   GoogleAuthProvider: class {
     static credential() { return {}; }
   },
-  setPersistence: jest.fn(),
-  browserSessionPersistence: {},
 }));
 jest.mock('firebase/functions', () => ({
   getFunctions: (...args) => mockGetFunctions(...args),
@@ -47,7 +46,7 @@ describe('authService + jaAlchemyApiService share one Firebase App/Auth/Function
     mockGetFunctions.mockReset();
 
     appInstance = { __app: true };
-    authInstance = { currentUser: null };
+    authInstance = { currentUser: null, authStateReady: jest.fn(async () => {}) };
     functionsInstance = { __functions: true };
     mockInitializeApp.mockReturnValue(appInstance);
     mockGetAuth.mockReturnValue(authInstance);

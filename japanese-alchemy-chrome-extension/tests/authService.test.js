@@ -29,11 +29,12 @@ jest.mock('../src/scripts/firebaseApp.js', () => ({
   firebaseAuth: mockAuthInstance,
 }));
 
-jest.mock('firebase/auth', () => ({
+const mockOnAuthStateChanged = jest.fn();
+
+jest.mock('firebase/auth/web-extension', () => ({
   signInWithCredential: (...args) => mockSignInWithCredential(...args),
+  onAuthStateChanged: (...args) => mockOnAuthStateChanged(...args),
   GoogleAuthProvider: MockGoogleAuthProvider,
-  setPersistence: jest.fn(),
-  browserSessionPersistence: {},
 }));
 
 describe('authService Google sign-in credential handshake', () => {
@@ -42,13 +43,14 @@ describe('authService Google sign-in credential handshake', () => {
   beforeEach(async () => {
     jest.resetModules();
     mockSignInWithCredential.mockReset().mockResolvedValue(undefined);
+    mockOnAuthStateChanged.mockReset();
     mockCredential.mockReset().mockImplementation((idToken, accessToken) => ({
       __mockCredential: true,
       idToken,
       accessToken,
     }));
 
-    mockAuthInstance = { currentUser: null };
+    mockAuthInstance = { currentUser: null, authStateReady: jest.fn(async () => {}) };
     mockFirebaseAppInstance = { __app: true };
 
     chromeMessageListener = null;
@@ -182,7 +184,7 @@ describe('authService Google sign-in credential handshake', () => {
     expect(token).toBe('REAL_FIREBASE_ID_TOKEN');
   });
 
-  test('requirement 5 (fallback characterization): getToken() falls back to the raw uid when no currentUser is signed in on the Auth instance', async () => {
+  test('P7.3-H: no credential means no real Firebase session, so isLoggedIn() is false and getToken() throws — a popup-reported uid never counts on its own', async () => {
     const authService = await loadAuthService();
     await Promise.resolve();
 
@@ -198,7 +200,7 @@ describe('authService Google sign-in credential handshake', () => {
     await signInPromise;
 
     expect(mockAuthInstance.currentUser).toBeNull();
-    const token = await authService.getToken();
-    expect(token).toBe('uid-5');
+    expect(authService.isLoggedIn()).toBe(false);
+    await expect(authService.getToken()).rejects.toThrow('User is not authenticated');
   });
 });

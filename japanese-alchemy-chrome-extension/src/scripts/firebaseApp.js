@@ -20,7 +20,17 @@
 // module and exactly one Firebase App/Auth/Functions instance in that
 // context.
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+// 'firebase/auth/web-extension' — NOT the standard 'firebase/auth' build.
+// Firebase publishes this variant specifically for browser-extension
+// contexts; its getAuth() defaults to indexedDBLocalPersistence, which
+// reliably survives an extension reload (a Chrome extension reload tears
+// down and recreates the side panel's document, so anything that isn't
+// genuinely disk-persisted is lost). The standard browser build's
+// persistence auto-detection does not reliably land on IndexedDB in a
+// chrome-extension:// origin — this was the root cause of P7.3-H (auth
+// state restoring `this.user` from chrome.storage.local while
+// firebaseAuth.currentUser stayed null after every reload).
+import { getAuth } from 'firebase/auth/web-extension';
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions';
 import firebaseConfig from './firebaseConfig.js';
 

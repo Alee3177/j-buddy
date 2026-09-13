@@ -1,6 +1,15 @@
 // Authentication Service for Japanese Alchemy Chrome Extension
 // Manages Firebase Authentication with Google Sign-In
-import { signInWithCredential, GoogleAuthProvider, setPersistence, browserSessionPersistence } from 'firebase/auth';
+//
+// P7.3-H session model: firebaseAuth.currentUser (via authStateReady() /
+// onAuthStateChanged, below) is the ONLY source of truth for authenticated
+// state. The chrome.storage.local `user` profile is a display cache — useful
+// for painting the UI immediately without waiting on Firebase Auth's restore
+// — but a stored uid/email alone never satisfies isLoggedIn(). Must import
+// from the SAME 'firebase/auth/web-extension' build firebaseApp.js uses
+// (see that file's comment) — mixing it with the standard 'firebase/auth'
+// build here would reintroduce a P7.3-E-style mismatched-instance bug.
+import { signInWithCredential, GoogleAuthProvider, onAuthStateChanged } from 'firebase/auth/web-extension';
 import { firebaseApp, firebaseAuth } from './firebaseApp.js';
 
 class AuthService {
@@ -17,32 +26,60 @@ class AuthService {
   }
 
   async init() {
-    // Load user from storage
+    // Paint a cached display profile immediately — see the class-level
+    // comment. This never sets isAuthenticated.
     await this.loadUserFromStorage();
-    
-    // If user is stored, initialize auth state
-    if (this.user) {
-      try {
-        // Try to sign in silently to get a token
-        // Note: This won't work without a credential, but we'll handle this
-        // by using the stored user info directly for callable functions
-        console.log('[AuthService] User loaded, auth state ready');
-      } catch (error) {
-        console.warn('[AuthService] Could not restore auth state:', error);
-      }
-    }
+
+    // Wait for Firebase Auth to finish restoring any persisted session
+    // before trusting currentUser — it starts null and is populated
+    // asynchronously from IndexedDB. Only after this resolves does
+    // currentUser reliably reflect whether a session actually survived.
+    await this.auth.authStateReady();
+    this.syncAuthenticatedStateFromFirebase();
+
+    // Keep isAuthenticated/user in sync with the real Auth session for the
+    // rest of this document's lifetime (e.g. a later signInWithCredential
+    // call during signInWithGoogle() below).
+    onAuthStateChanged(this.auth, () => {
+      this.syncAuthenticatedStateFromFirebase();
+    });
   }
 
-  // Load user from chrome.storage.local
+  // Load the cached display profile from chrome.storage.local. DISPLAY
+  // CACHE ONLY (P7.3-H) — never sets isAuthenticated. Real authenticated
+  // state comes exclusively from syncAuthenticatedStateFromFirebase().
   async loadUserFromStorage() {
     const result = await chrome.storage.local.get('user');
     const user = result?.user;
     if (user) {
       this.user = user;
-      this.isAuthenticated = true;
-      console.log('[AuthService] User loaded from storage:', this.user.email);
+      console.log('[AuthService] Cached profile loaded from storage:', this.user.email);
     }
     return this.user;
+  }
+
+  // The single source of truth for authenticated state (P7.3-H): whatever
+  // firebaseAuth.currentUser actually is right now. Also keeps the
+  // chrome.storage.local display cache in sync with it, so a future reload's
+  // loadUserFromStorage() shows the right cached profile while waiting on
+  // authStateReady() again.
+  syncAuthenticatedStateFromFirebase() {
+    const currentUser = this.auth.currentUser;
+    this.isAuthenticated = currentUser !== null;
+    if (currentUser) {
+      this.user = {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        displayName: currentUser.displayName,
+        photoURL: currentUser.photoURL,
+      };
+      chrome.storage.local.set({ user: this.user });
+    } else {
+      // No real session (e.g. a stored profile existed but did not survive
+      // — Case 2 in P7.3-H): never let the stale cache imply authenticated.
+      this.user = null;
+      chrome.storage.local.remove('user');
+    }
   }
 
   // Check if user is authenticated
@@ -136,9 +173,10 @@ class AuthService {
             clearTimeout(timeout);
             chrome.runtime.onMessage.removeListener(listener);
 
-            // Save user
+            // Cache the display profile immediately for a responsive UI.
+            // Real authenticated state is set below, from Firebase Auth
+            // itself (P7.3-H) — a popup-supplied uid never counts on its own.
             this.user = message.user;
-            this.isAuthenticated = true;
             chrome.storage.local.set({ user: this.user });
 
             // Sign in with credential in this context for callable functions.
@@ -158,9 +196,21 @@ class AuthService {
                 // This is not critical - we'll still use the user data
               }
             }
+            // Reflect whatever Firebase Auth's real state is now, whether
+            // signInWithCredential above succeeded or not (this can clear
+            // this.user back to null if it never actually succeeded — see
+            // Section B). Also covered by the onAuthStateChanged listener in
+            // init(); calling it explicitly here removes any doubt about
+            // listener ordering.
+            this.syncAuthenticatedStateFromFirebase();
 
-            console.log('[AuthService] User signed in:', this.user.email);
-            resolve(this.user);
+            // Resolve with what the popup itself reported — the person did
+            // complete Google's sign-in — independent of whether the deeper
+            // Firebase Auth linkage above happened to succeed. isLoggedIn()/
+            // personal-save gating still depend solely on the real,
+            // just-synced this.isAuthenticated, not on this resolved value.
+            console.log('[AuthService] User signed in:', message.user.email);
+            resolve(message.user);
           } else if (message.success === false) {
             clearTimeout(timeout);
             chrome.runtime.onMessage.removeListener(listener);

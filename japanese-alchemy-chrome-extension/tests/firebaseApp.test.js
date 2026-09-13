@@ -6,7 +6,7 @@ const mockConnectFunctionsEmulator = jest.fn();
 jest.mock('firebase/app', () => ({
   initializeApp: (...args) => mockInitializeApp(...args),
 }));
-jest.mock('firebase/auth', () => ({
+jest.mock('firebase/auth/web-extension', () => ({
   getAuth: (...args) => mockGetAuth(...args),
 }));
 jest.mock('firebase/functions', () => ({
