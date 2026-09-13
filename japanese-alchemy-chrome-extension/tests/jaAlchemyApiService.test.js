@@ -219,4 +219,129 @@ describe('JaAlchemyApiService', () => {
     expect(onDone).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith('network disconnected');
   });
+
+  describe('saveAnalysis', () => {
+    const baseAnalysis = () => ({
+      words: [{ term: '言葉', detail: 'word' }],
+      grammars: [{ point: '文法', explanation: 'grammar point' }],
+      page: { rendered_markdown: '# md', structured_json: { words: [], grammars: [] } },
+      is_shared: false,
+      metadata: { source_text: 'テキスト', source_url: 'https://example.com', saved_at: '2026-01-01T00:00:00.000Z' },
+    });
+
+    test('calls saveItems on the correct Functions client (us-central1) with the unchanged request payload shape', async () => {
+      const functionsClient = {};
+      const callable = jest.fn(async () => ({
+        data: { success: true, saved: { words_count: 1, grammars_count: 1 }, message: 'saved' },
+      }));
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue(functionsClient);
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const analysis = baseAnalysis();
+      await new window.JaAlchemyApiService().saveAnalysis(analysis, 'uid-123');
+
+      expect(mockGetFunctions).toHaveBeenCalledWith(expect.anything(), 'us-central1');
+      expect(mockHttpsCallable).toHaveBeenCalledWith(functionsClient, 'saveItems');
+      expect(callable).toHaveBeenCalledWith({ userId: 'uid-123', analysis });
+    });
+
+    test('maps a successful response into { success, words_count, grammars_count, message }', async () => {
+      const callable = jest.fn(async () => ({
+        data: { success: true, saved: { words_count: 3, grammars_count: 2 }, message: '已成功儲存分析頁面！' },
+      }));
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const result = await new window.JaAlchemyApiService().saveAnalysis(baseAnalysis(), 'uid-123');
+
+      expect(result).toEqual({
+        success: true,
+        words_count: 3,
+        grammars_count: 2,
+        message: '已成功儲存分析頁面！',
+      });
+    });
+
+    test('defaults missing saved counts to 0 and supplies a fallback message', async () => {
+      const callable = jest.fn(async () => ({ data: { success: true } }));
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const result = await new window.JaAlchemyApiService().saveAnalysis(baseAnalysis(), 'uid-123');
+
+      expect(result).toEqual({
+        success: true,
+        words_count: 0,
+        grammars_count: 0,
+        message: 'Analysis saved successfully',
+      });
+    });
+
+    test('shared save sends a null userId regardless of the caller-supplied id', async () => {
+      const callable = jest.fn(async () => ({
+        data: { success: true, saved: { words_count: 0, grammars_count: 0 }, message: 'shared' },
+      }));
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const sharedAnalysis = { ...baseAnalysis(), is_shared: true };
+      await new window.JaAlchemyApiService().saveAnalysis(sharedAnalysis, null);
+
+      expect(callable).toHaveBeenCalledWith({ userId: null, analysis: sharedAnalysis });
+    });
+
+    test('translates an unauthenticated callable error into the personal-save sign-in message', async () => {
+      const authError = Object.assign(new Error('unauthenticated'), { code: 'unauthenticated' });
+      const callable = jest.fn(async () => { throw authError; });
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const personalAnalysis = { ...baseAnalysis(), is_shared: false };
+
+      await expect(
+        new window.JaAlchemyApiService().saveAnalysis(personalAnalysis, null)
+      ).rejects.toThrow('您必須先登入，才能將項目儲存至私人收藏。');
+    });
+
+    test('does not apply the personal-save sign-in message to a shared-save error', async () => {
+      const authError = Object.assign(new Error('unauthenticated'), { code: 'unauthenticated' });
+      const callable = jest.fn(async () => { throw authError; });
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const sharedAnalysis = { ...baseAnalysis(), is_shared: true };
+
+      await expect(
+        new window.JaAlchemyApiService().saveAnalysis(sharedAnalysis, null)
+      ).rejects.toThrow('Firebase saveItems 函式失敗：unauthenticated');
+    });
+
+    test('throws the server-reported message when the callable resolves with success: false', async () => {
+      const callable = jest.fn(async () => ({ data: { success: false, message: '儲存失敗：欄位錯誤' } }));
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await expect(
+        new window.JaAlchemyApiService().saveAnalysis(baseAnalysis(), 'uid-123')
+      ).rejects.toThrow('儲存失敗：欄位錯誤');
+    });
+
+    test('wraps a transport/unknown error with the generic saveItems failure message', async () => {
+      const callable = jest.fn(async () => { throw new Error('network disconnected'); });
+      mockInitializeApp.mockReturnValue({});
+      mockGetFunctions.mockReturnValue({});
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await expect(
+        new window.JaAlchemyApiService().saveAnalysis(baseAnalysis(), 'uid-123')
+      ).rejects.toThrow('Firebase saveItems 函式失敗：network disconnected');
+    });
+  });
 });
