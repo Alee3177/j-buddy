@@ -144,13 +144,16 @@ class AuthService {
             this.isAuthenticated = true;
             chrome.storage.local.set({ user: this.user });
 
-            // Sign in with credential in this context for callable functions
-            if (message.credential && message.credential.accessToken) {
+            // Sign in with credential in this context for callable functions.
+            // GoogleAuthProvider.credential(idToken, accessToken) is a STATIC
+            // factory taking positional tokens (the SDK requires at least one
+            // of the two) — not an instance method taking an { idToken } object.
+            if (message.credential && (message.credential.idToken || message.credential.accessToken)) {
               try {
-                const provider = new GoogleAuthProvider();
-                const credential = provider.credential({
-                  idToken: message.credential.accessToken
-                });
+                const credential = GoogleAuthProvider.credential(
+                  message.credential.idToken || null,
+                  message.credential.accessToken || null
+                );
                 await signInWithCredential(this.auth, credential);
                 console.log('[AuthService] Firebase Auth state established in sidepanel context');
               } catch (authError) {

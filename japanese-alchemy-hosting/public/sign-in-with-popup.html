@@ -48,9 +48,19 @@
                 displayName: result.user.displayName,
                 photoURL: result.user.photoURL
               };
+              // The extension's authService needs this to call
+              // signInWithCredential in its own context, establishing a real
+              // currentUser so Functions callables auto-attach an ID token.
+              const oauthCredential = GoogleAuthProvider.credentialFromResult(result);
               sendResponse({
                 success: true,
-                user: user
+                user: user,
+                credential: {
+                  providerId: oauthCredential ? oauthCredential.providerId : null,
+                  signInMethod: oauthCredential ? oauthCredential.signInMethod : null,
+                  idToken: oauthCredential ? oauthCredential.idToken : null,
+                  accessToken: oauthCredential ? oauthCredential.accessToken : null
+                }
               });
             })
             .catch((error) => {
