@@ -26,8 +26,8 @@ const ANALYSIS_ALLOWED_ATTR = ['colspan', 'href', 'rowspan', 'title'];
 const COMPLETED_ANALYSIS_RESULT_CACHE_VERSION = 1;
 const COMPLETED_ANALYSIS_RESULT_STORAGE_KEY = 'lastAnalysisResult';
 const CONTROLLED_CHECKBOX_PATTERN = /<input type="checkbox" name="(words|grammars)" value="([^"<>]*)">/g;
-export const WEBSITE_URL = 'https://japanese-alchemy-webapp.web.app/';
-export const FAQ_URL = 'https://japanese-alchemy-webapp.web.app/faq';
+export const WEBSITE_URL = 'https://j-buddy-ez3177.web.app/';
+export const FAQ_URL = 'https://j-buddy-ez3177.web.app/faq';
 
 export async function openExternalPage(url) {
     await chrome.tabs.create({ url, active: true });

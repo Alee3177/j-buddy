@@ -1,13 +1,12 @@
 // Your web app's Firebase configuration
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "AIzaSyBGE0Ty4NFy15Y8OGIfCJDM6hTZaMrBlv8",
-  authDomain: "japanese-alchemy.firebaseapp.com",
-  projectId: "japanese-alchemy",
-  storageBucket: "japanese-alchemy.firebasestorage.app",
-  messagingSenderId: "534868241348",
-  appId: "1:534868241348:web:161aeabbdd6acf0dad5291",
-  measurementId: "G-0BWD8153FC"
+  apiKey: "AIzaSyANsygtC5y-vqF762-IP_y01CSQwBzEUNs",
+  authDomain: "j-buddy-ez3177.firebaseapp.com",
+  projectId: "j-buddy-ez3177",
+  storageBucket: "j-buddy-ez3177.firebasestorage.app",
+  messagingSenderId: "793282830675",
+  appId: "1:793282830675:web:98e3c136b546b6602bc1a6"
 };
 
 export default firebaseConfig;

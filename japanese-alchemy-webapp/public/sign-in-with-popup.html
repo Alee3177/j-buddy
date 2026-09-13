@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>signInWithPopup</title>
+  </head>
+  <body>
+    <h1>signInWithPopup</h1>
+    <script type="module">
+      import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+      import { getAuth, signInWithPopup, GoogleAuthProvider, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+      // Firebase configuration
+      const firebaseConfig = {
+        apiKey: "AIzaSyANsygtC5y-vqF762-IP_y01CSQwBzEUNs",
+        authDomain: "j-buddy-ez3177.firebaseapp.com",
+        projectId: "j-buddy-ez3177",
+        storageBucket: "j-buddy-ez3177.firebasestorage.app",
+        messagingSenderId: "793282830675",
+        appId: "1:793282830675:web:98e3c136b546b6602bc1a6"
+      };
+
+      // Initialize Firebase
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const provider = new GoogleAuthProvider();
+
+      // This code runs inside of an iframe in the extension's offscreen document.
+      // This gives you a reference to the parent frame, i.e. the offscreen document.
+      // You will need this to assign the targetOrigin for postMessage.
+      const PARENT_FRAME = document.location.ancestorOrigins[0];
+
+      function sendResponse(result) {
+        globalThis.parent.self.postMessage(JSON.stringify(result), PARENT_FRAME);
+      }
+
+      globalThis.addEventListener('message', async function({data}) {
+        console.log('[Firebase Hosting] Received message:', data);
+
+        if (data.type === 'signInWithGoogle') {
+          // Opens the Google sign-in page in a popup, inside of an iframe in the
+          // extension's offscreen document.
+          signInWithPopup(auth, provider)
+            .then((result) => {
+              const user = {
+                uid: result.user.uid,
+                email: result.user.email,
+                displayName: result.user.displayName,
+                photoURL: result.user.photoURL
+              };
+              // The extension's authService needs this to call
+              // signInWithCredential in its own context, establishing a real
+              // currentUser so Functions callables auto-attach an ID token.
+              const oauthCredential = GoogleAuthProvider.credentialFromResult(result);
+              sendResponse({
+                success: true,
+                user: user,
+                credential: {
+                  providerId: oauthCredential ? oauthCredential.providerId : null,
+                  signInMethod: oauthCredential ? oauthCredential.signInMethod : null,
+                  idToken: oauthCredential ? oauthCredential.idToken : null,
+                  accessToken: oauthCredential ? oauthCredential.accessToken : null
+                }
+              });
+            })
+            .catch((error) => {
+              console.error('[Firebase Hosting] Sign in error:', error);
+              sendResponse({
+                success: false,
+                error: error.message,
+                code: error.code
+              });
+            });
+        } else if (data.type === 'signOut') {
+          signOut(auth)
+            .then(() => {
+              sendResponse({
+                action: 'signOut',
+                success: true
+              });
+            })
+            .catch((error) => {
+              console.error('[Firebase Hosting] Sign out error:', error);
+              sendResponse({
+                action: 'signOut',
+                success: false,
+                error: error.message,
+                code: error.code
+              });
+            });
+        }
+      });
+    </script>
+  </body>
+</html>

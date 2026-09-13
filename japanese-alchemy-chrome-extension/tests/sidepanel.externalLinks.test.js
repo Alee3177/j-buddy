@@ -12,8 +12,8 @@ describe('sidepanel external links', () => {
   });
 
   test.each([
-    ['website', WEBSITE_URL, 'https://japanese-alchemy-webapp.web.app/'],
-    ['FAQ', FAQ_URL, 'https://japanese-alchemy-webapp.web.app/faq'],
+    ['website', WEBSITE_URL, 'https://j-buddy-ez3177.web.app/'],
+    ['FAQ', FAQ_URL, 'https://j-buddy-ez3177.web.app/faq'],
   ])('opens the %s destination in an active new tab', async (_name, destination, expectedUrl) => {
     await openExternalPage(destination);
 
