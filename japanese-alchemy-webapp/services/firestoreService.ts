@@ -5,12 +5,13 @@ import {
   doc,
   documentId,
   limit,
+  onSnapshot,
   query,
   orderBy,
   startAfter,
   Timestamp,
 } from 'firebase/firestore';
-import type { Firestore, QueryConstraint } from 'firebase/firestore';
+import type { Firestore, QueryConstraint, Unsubscribe } from 'firebase/firestore';
 import { db as firestoreDb, auth as firebaseAuth } from '@/lib/firebase';
 
 /**
@@ -320,4 +321,60 @@ export async function listLearningItems(
       : null;
 
   return { items, nextCursor };
+}
+
+/**
+ * P7.3-I — live variant of the first page of `listLearningItems()`.
+ *
+ * Same query (createdAt DESC, __name__ DESC, page size + 1) and the same
+ * mapping to `ListLearningItemsResult`, but via `onSnapshot` instead of a
+ * one-shot `getDocs`: `onData` fires with the current first page immediately
+ * and again on every subsequent Firestore change (e.g. a Chrome-extension
+ * save), so an open webapp reflects external writes without a reload.
+ * `loadMore` beyond this first page still goes through `listLearningItems`
+ * unchanged.
+ *
+ * @throws synchronously if there is no authenticated user — no listener is
+ * attached, matching `listLearningItems`'s fail-closed behaviour.
+ */
+export function subscribeToLearningItems(
+  pageSize: number | undefined,
+  onData: (result: ListLearningItemsResult) => void,
+  onError: (error: unknown) => void
+): Unsubscribe {
+  const currentUser = firebaseAuth?.currentUser;
+  if (!currentUser) {
+    throw new Error('You must be signed in to view learning items.');
+  }
+  const db = requireDb();
+
+  const size = resolveLearningItemsLimit(pageSize);
+  const userDocRef = doc(db, 'users', currentUser.uid);
+  const q = query(
+    collection(userDocRef, LEARNING_ITEMS_SUBCOLLECTION),
+    orderBy('createdAt', 'desc'),
+    orderBy(documentId(), 'desc'),
+    // Fetch one extra row so "is there a next page?" needs no second query.
+    limit(size + 1)
+  );
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const hasMore = snapshot.docs.length > size;
+      const items = snapshot.docs
+        .slice(0, size)
+        .map((d) => toLearningItem(d.id, d.data() as Record<string, unknown>))
+        .filter((item): item is LearningItem => item !== null);
+
+      const last = items[items.length - 1];
+      const nextCursor =
+        hasMore && last
+          ? encodeLearningItemsCursor({ createdAt: last.createdAt, id: last.id })
+          : null;
+
+      onData({ items, nextCursor });
+    },
+    onError
+  );
 }

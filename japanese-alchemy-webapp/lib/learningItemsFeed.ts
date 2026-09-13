@@ -5,15 +5,25 @@
  * dashboard tab.
  *
  * This module owns ALL of the tab's stateful behaviour so it can be unit-tested
- * without a DOM: a pure reducer, two thin async runners around the P2.1
- * `listLearningItems()` service, and a hook that wires them to React.
+ * without a DOM: a pure reducer, a live first-page subscription (P7.3-I), a
+ * thin async runner for "load more" around the P2.1 `listLearningItems()`
+ * service, and a hook that wires them to React.
  *
  * Occurrence semantics from P2.1 are preserved verbatim — pages are appended in
  * returned order with NO client-side de-duplication, grouping, or re-sorting.
+ *
+ * P7.3-I: the first page is now driven by `subscribeToLearningItems` (an
+ * `onSnapshot` listener) instead of a one-shot fetch, so an external Firestore
+ * write (e.g. a Chrome-extension save) updates the tab and its count without a
+ * browser reload. Trade-off: because the listener always reports the current
+ * first page, a live update replaces the whole `items` array — any additional
+ * pages appended via `loadMore` are dropped and `cursor` is recomputed from the
+ * fresh first page. This mirrors what a manual reload already did (start over
+ * from page 1); it only makes it automatic.
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
-import { listLearningItems } from '@/services/firestoreService';
+import { listLearningItems, subscribeToLearningItems } from '@/services/firestoreService';
 import type { ListLearningItemsResult } from '@/types';
 import type { LearningItem } from '@/types';
 
@@ -92,27 +102,49 @@ export function learningItemsFeedReducer(
   }
 }
 
-type FirstPageFetcher = () => Promise<ListLearningItemsResult>;
 type NextPageFetcher = (cursor: string) => Promise<ListLearningItemsResult>;
+type FirstPageSubscriber = (
+  onResult: (result: ListLearningItemsResult) => void,
+  onError: (error: unknown) => void
+) => () => void;
+
+const NOOP_UNSUBSCRIBE = () => {};
 
 /**
- * Load the first page. `isCurrent()` is checked after the await so a response
- * that arrives after a logout / user switch is discarded instead of applied.
+ * Subscribe to the live first page. Fires `FIRST_PAGE_PENDING` immediately,
+ * then `FIRST_PAGE_OK` on every emission (the initial snapshot AND every
+ * later one caused by an external write) or `FIRST_PAGE_FAILED` on error.
+ * `isCurrent()` is checked on every emission so a listener left over from a
+ * logout / user switch can never apply a stale result — belt-and-suspenders
+ * alongside the returned unsubscribe, which the caller must invoke on
+ * cleanup.
+ *
+ * Returns the unsubscribe function (a no-op if subscribing failed outright,
+ * e.g. no authenticated user — matching `listLearningItems`'s fail-closed
+ * behaviour).
  */
-export async function runFirstPage(
+export function startFirstPageFeed(
   dispatch: (event: LearningItemsFeedEvent) => void,
   isCurrent: () => boolean,
-  fetchFirstPage: FirstPageFetcher = () => listLearningItems()
-): Promise<void> {
-  if (!isCurrent()) return;
+  subscribeFirstPage: FirstPageSubscriber = (onResult, onError) =>
+    subscribeToLearningItems(undefined, onResult, onError)
+): () => void {
+  if (!isCurrent()) return NOOP_UNSUBSCRIBE;
   dispatch({ type: 'FIRST_PAGE_PENDING' });
   try {
-    const result = await fetchFirstPage();
-    if (!isCurrent()) return;
-    dispatch({ type: 'FIRST_PAGE_OK', result });
+    return subscribeFirstPage(
+      (result) => {
+        if (!isCurrent()) return;
+        dispatch({ type: 'FIRST_PAGE_OK', result });
+      },
+      () => {
+        if (!isCurrent()) return;
+        dispatch({ type: 'FIRST_PAGE_FAILED' });
+      }
+    );
   } catch {
-    if (!isCurrent()) return;
-    dispatch({ type: 'FIRST_PAGE_FAILED' });
+    if (isCurrent()) dispatch({ type: 'FIRST_PAGE_FAILED' });
+    return NOOP_UNSUBSCRIBE;
   }
 }
 
@@ -150,7 +182,10 @@ export interface LearningItemsFeed {
  *  - nothing is queried until `authResolved` is `true`;
  *  - `uid === null` clears the feed and issues no query;
  *  - a new `uid` bumps an internal generation counter (so an in-flight request
- *    for the previous user can never land) and triggers a fresh first page.
+ *    for the previous user can never land) and (re-)subscribes to a fresh live
+ *    first page. The previous subscription is always unsubscribed first (via
+ *    the effect cleanup, which React runs before re-running the effect) so a
+ *    user switch or unmount never leaves a duplicate listener behind.
  */
 export function useLearningItemsFeed(
   uid: string | null,
@@ -169,10 +204,11 @@ export function useLearningItemsFeed(
       dispatch({ type: 'RESET' });
       return;
     }
-    void runFirstPage(
+    const unsubscribe = startFirstPageFeed(
       dispatch,
       () => generationRef.current === generation
     );
+    return unsubscribe;
   }, [uid, authResolved]);
 
   const loadMore = useCallback(() => {

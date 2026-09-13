@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   initialLearningItemsFeedState,
   learningItemsFeedReducer,
-  runFirstPage,
+  startFirstPageFeed,
   runNextPage,
   type LearningItemsFeedState,
 } from './learningItemsFeed';
 import type { LearningItem, ListLearningItemsResult } from '@/types';
 
-vi.mock('@/services/firestoreService', () => ({ listLearningItems: vi.fn() }));
+vi.mock('@/services/firestoreService', () => ({
+  listLearningItems: vi.fn(),
+  subscribeToLearningItems: vi.fn(),
+}));
 
 function item(overrides: Partial<LearningItem> = {}): LearningItem {
   return {
@@ -110,28 +113,52 @@ describe('learningItemsFeedReducer', () => {
   });
 });
 
-describe('runFirstPage', () => {
+describe('startFirstPageFeed', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('dispatches PENDING then OK on success', async () => {
+  it('dispatches PENDING then OK on the initial emission, and OK again on a later live emission', () => {
     const dispatch = vi.fn();
-    const result = page([item({ id: 'a' })], 'c1');
+    let onResult!: (r: ListLearningItemsResult) => void;
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn((res: typeof onResult) => {
+      onResult = res;
+      return unsubscribe;
+    });
 
-    await runFirstPage(dispatch, () => true, async () => result);
+    const result = startFirstPageFeed(dispatch, () => true, subscribe);
 
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual([
       'FIRST_PAGE_PENDING',
-      'FIRST_PAGE_OK',
     ]);
-    expect(dispatch.mock.calls[1][0].result).toBe(result);
+
+    // Initial snapshot: count = 2.
+    onResult(page([item({ id: 'a' }), item({ id: 'b' })], null));
+    expect(dispatch.mock.calls[1][0]).toEqual({
+      type: 'FIRST_PAGE_OK',
+      result: page([item({ id: 'a' }), item({ id: 'b' })], null),
+    });
+
+    // External write lands — the same subscription fires again: count = 4.
+    onResult(
+      page([item({ id: 'c' }), item({ id: 'd' }), item({ id: 'a' }), item({ id: 'b' })], null)
+    );
+    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(dispatch.mock.calls[2][0].type).toBe('FIRST_PAGE_OK');
+    expect(dispatch.mock.calls[2][0].result.items).toHaveLength(4);
+
+    expect(typeof result).toBe('function');
   });
 
-  it('dispatches PENDING then FAILED when the fetch rejects', async () => {
+  it('dispatches PENDING then FAILED when the subscription reports an error', () => {
     const dispatch = vi.fn();
-
-    await runFirstPage(dispatch, () => true, async () => {
-      throw new Error('boom');
+    let onError!: (e: unknown) => void;
+    const subscribe = vi.fn((_res: unknown, err: typeof onError) => {
+      onError = err;
+      return vi.fn();
     });
+
+    startFirstPageFeed(dispatch, () => true, subscribe);
+    onError(new Error('boom'));
 
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual([
       'FIRST_PAGE_PENDING',
@@ -139,28 +166,48 @@ describe('runFirstPage', () => {
     ]);
   });
 
-  it('discards a response that resolves after the generation changed', async () => {
+  it('dispatches PENDING then FAILED when subscribing throws synchronously', () => {
     const dispatch = vi.fn();
-    let current = true;
+    const subscribe = vi.fn(() => {
+      throw new Error('not signed in');
+    });
 
-    await runFirstPage(
-      dispatch,
-      () => current,
-      async () => {
-        current = false; // simulate a user switch mid-flight
-        return page([item()], null);
-      }
-    );
+    const unsubscribe = startFirstPageFeed(dispatch, () => true, subscribe);
+
+    expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual([
+      'FIRST_PAGE_PENDING',
+      'FIRST_PAGE_FAILED',
+    ]);
+    expect(() => unsubscribe()).not.toThrow();
+  });
+
+  it('discards an emission that arrives after the generation changed', () => {
+    const dispatch = vi.fn();
+    let onResult!: (r: ListLearningItemsResult) => void;
+    let current = true;
+    const subscribe = vi.fn((res: typeof onResult) => {
+      onResult = res;
+      return vi.fn();
+    });
+
+    startFirstPageFeed(dispatch, () => current, subscribe);
+    current = false; // simulate a user switch
+    onResult(page([item()], null));
 
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual([
       'FIRST_PAGE_PENDING',
     ]);
   });
 
-  it('does nothing when already stale before it starts', async () => {
+  it('does nothing and returns a no-op unsubscribe when already stale before it starts', () => {
     const dispatch = vi.fn();
-    await runFirstPage(dispatch, () => false, async () => page([], null));
+    const subscribe = vi.fn();
+
+    const unsubscribe = startFirstPageFeed(dispatch, () => false, subscribe);
+
     expect(dispatch).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(() => unsubscribe()).not.toThrow();
   });
 });
 

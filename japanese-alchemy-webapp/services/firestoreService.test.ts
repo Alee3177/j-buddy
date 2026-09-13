@@ -7,6 +7,7 @@ const firestore = vi.hoisted(() => ({
   documentId: vi.fn(),
   getDocs: vi.fn(),
   limit: vi.fn(),
+  onSnapshot: vi.fn(),
   orderBy: vi.fn(),
   query: vi.fn(),
   startAfter: vi.fn(),
@@ -27,6 +28,7 @@ import {
   getSharedVocabularies,
   getSharedGrammars,
   listLearningItems,
+  subscribeToLearningItems,
   encodeLearningItemsCursor,
   decodeLearningItemsCursor,
 } from './firestoreService';
@@ -463,5 +465,163 @@ describe('listLearningItems', () => {
     const result = await listLearningItems();
 
     expect(result.items.map((i) => i.id)).toEqual(['ok-1', 'ok-2']);
+  });
+});
+
+// P7.3-I — live first-page listener backing the realtime dashboard refresh.
+describe('subscribeToLearningItems', () => {
+  const DOCUMENT_ID = { __sentinel: 'documentId' };
+
+  function itemDoc(overrides: Record<string, unknown> = {}) {
+    const full = {
+      id: 'auto-a',
+      userId: 'me',
+      sourceAnalysisId: 'page-1',
+      type: 'vocab',
+      surface: '{改善|かいぜん}',
+      status: 'NEW',
+      createdAt: 300,
+      updatedAt: 300,
+      lexicalKey: 'vocab|改善|かいぜん',
+      reading: 'かいぜん',
+      meaning: '改善',
+      sourceSentence: 'S',
+      sourceUrl: null,
+      ...overrides,
+    };
+    const { id, ...data } = full;
+    return { id: id as string, data: () => data };
+  }
+
+  function descendingDocs(n: number) {
+    return Array.from({ length: n }, (_, i) =>
+      itemDoc({ id: `d${i}`, createdAt: 1000 - i })
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    firebaseMock.auth.currentUser = { uid: 'me' };
+
+    firestore.doc.mockImplementation((_db: unknown, ...segments: string[]) => ({
+      __ref: 'doc',
+      path: segments.join('/'),
+    }));
+    firestore.collection.mockImplementation(
+      (parent: { path: string }, name: string) => ({
+        __ref: 'collection',
+        path: `${parent.path}/${name}`,
+      })
+    );
+    firestore.orderBy.mockImplementation((field: unknown, direction: unknown) => ({
+      __c: 'orderBy',
+      field,
+      direction,
+    }));
+    firestore.documentId.mockImplementation(() => DOCUMENT_ID);
+    firestore.limit.mockImplementation((count: number) => ({ __c: 'limit', count }));
+    firestore.query.mockImplementation(
+      (source: unknown, ...constraints: unknown[]) => ({ source, constraints })
+    );
+    firestore.onSnapshot.mockReturnValue(vi.fn());
+  });
+
+  it('throws synchronously and attaches no listener when signed out', () => {
+    firebaseMock.auth.currentUser = null;
+
+    expect(() => subscribeToLearningItems(undefined, vi.fn(), vi.fn())).toThrow(
+      /signed in/i
+    );
+    expect(firestore.onSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('subscribes to users/{auth.uid}/learning_items ordered createdAt desc, id desc, limit 21', () => {
+    subscribeToLearningItems(undefined, vi.fn(), vi.fn());
+
+    expect(firestore.doc).toHaveBeenCalledWith(firebaseMock.db, 'users', 'me');
+    expect(firestore.collection).toHaveBeenCalledWith(
+      { __ref: 'doc', path: 'users/me' },
+      'learning_items'
+    );
+    expect(firestore.orderBy).toHaveBeenNthCalledWith(1, 'createdAt', 'desc');
+    expect(firestore.orderBy).toHaveBeenNthCalledWith(2, DOCUMENT_ID, 'desc');
+    expect(firestore.limit).toHaveBeenCalledWith(21);
+    expect(firestore.onSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects a custom page size', () => {
+    subscribeToLearningItems(5, vi.fn(), vi.fn());
+    expect(firestore.limit).toHaveBeenCalledWith(6);
+  });
+
+  it('maps each snapshot to items + nextCursor, live (not just once)', () => {
+    const onData = vi.fn();
+    let handler: (snapshot: { docs: unknown[] }) => void = () => {};
+    firestore.onSnapshot.mockImplementation((_q: unknown, cb: typeof handler) => {
+      handler = cb;
+      return vi.fn();
+    });
+
+    subscribeToLearningItems(undefined, onData, vi.fn());
+
+    // Initial snapshot: 2 items.
+    handler({ docs: descendingDocs(2) });
+    expect(onData).toHaveBeenLastCalledWith({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: 'd0' }),
+        expect.objectContaining({ id: 'd1' }),
+      ]),
+      nextCursor: null,
+    });
+    expect(onData.mock.calls[0][0].items).toHaveLength(2);
+
+    // External write lands — the same listener fires again with 4 items.
+    handler({ docs: descendingDocs(4) });
+    expect(onData).toHaveBeenCalledTimes(2);
+    expect(onData.mock.calls[1][0].items).toHaveLength(4);
+  });
+
+  it('reports hasMore via nextCursor when more than pageSize rows exist', () => {
+    const onData = vi.fn();
+    let handler: (snapshot: { docs: unknown[] }) => void = () => {};
+    firestore.onSnapshot.mockImplementation((_q: unknown, cb: typeof handler) => {
+      handler = cb;
+      return vi.fn();
+    });
+
+    subscribeToLearningItems(2, onData, vi.fn());
+    handler({ docs: descendingDocs(3) });
+
+    expect(onData.mock.calls[0][0].items).toHaveLength(2);
+    expect(onData.mock.calls[0][0].nextCursor).toBe(
+      encodeLearningItemsCursor({ createdAt: 1000 - 1, id: 'd1' })
+    );
+  });
+
+  it('forwards listener errors to onError', () => {
+    const onError = vi.fn();
+    let errorHandler: (error: unknown) => void = () => {};
+    firestore.onSnapshot.mockImplementation(
+      (_q: unknown, _cb: unknown, errCb: typeof errorHandler) => {
+        errorHandler = errCb;
+        return vi.fn();
+      }
+    );
+
+    subscribeToLearningItems(undefined, vi.fn(), onError);
+    const boom = new Error('permission-denied');
+    errorHandler(boom);
+
+    expect(onError).toHaveBeenCalledWith(boom);
+  });
+
+  it('returns the underlying unsubscribe function', () => {
+    const unsubscribe = vi.fn();
+    firestore.onSnapshot.mockReturnValue(unsubscribe);
+
+    const result = subscribeToLearningItems(undefined, vi.fn(), vi.fn());
+    result();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

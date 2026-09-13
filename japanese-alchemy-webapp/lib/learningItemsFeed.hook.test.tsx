@@ -12,8 +12,10 @@ import {
 import type { LearningItem, ListLearningItemsResult } from '@/types';
 
 const listLearningItems = vi.fn();
+const subscribeToLearningItems = vi.fn();
 vi.mock('@/services/firestoreService', () => ({
   listLearningItems: (...args: unknown[]) => listLearningItems(...args),
+  subscribeToLearningItems: (...args: unknown[]) => subscribeToLearningItems(...args),
 }));
 
 // React 19 act() environment flag.
@@ -42,6 +44,33 @@ const pageResult = (
   ids: string[],
   nextCursor: string | null
 ): ListLearningItemsResult => ({ items: ids.map(item), nextCursor });
+
+/**
+ * Every `subscribeToLearningItems` call gets its own unsubscribe spy and its
+ * own captured onData/onError, keyed by call index — so a test can drive a
+ * specific subscription's live updates and assert its listener was torn down.
+ */
+interface Subscription {
+  unsubscribe: ReturnType<typeof vi.fn>;
+  emit: (result: ListLearningItemsResult) => void;
+  fail: (error: unknown) => void;
+}
+
+function stubSubscriptions(): Subscription[] {
+  const subs: Subscription[] = [];
+  subscribeToLearningItems.mockImplementation(
+    (
+      _pageSize: number | undefined,
+      onData: (r: ListLearningItemsResult) => void,
+      onError: (e: unknown) => void
+    ) => {
+      const unsubscribe = vi.fn();
+      subs.push({ unsubscribe, emit: onData, fail: onError });
+      return unsubscribe;
+    }
+  );
+  return subs;
+}
 
 function mountFeed(initial: { uid: string | null; authResolved: boolean }) {
   const sink = { current: null as LearningItemsFeed | null };
@@ -85,18 +114,24 @@ function mountFeed(initial: { uid: string | null; authResolved: boolean }) {
 
 beforeEach(() => {
   listLearningItems.mockReset();
+  subscribeToLearningItems.mockReset();
 });
 
 describe('useLearningItemsFeed', () => {
-  it('loads the first page exactly once after auth resolves', async () => {
-    listLearningItems.mockResolvedValue(pageResult(['a'], 'c1'));
+  it('subscribes exactly once after auth resolves and applies the initial snapshot', async () => {
+    const subs = stubSubscriptions();
 
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
     await feed.flush();
 
-    expect(listLearningItems).toHaveBeenCalledTimes(1);
-    expect(listLearningItems).toHaveBeenCalledWith();
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
+    expect(subs[0]).toBeDefined();
+
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], 'c1'));
+    });
+
     expect(feed.state().phase).toBe('ready');
     expect(feed.state().items.map((i) => i.id)).toEqual(['a']);
     expect(feed.state().cursor).toBe('c1');
@@ -104,30 +139,64 @@ describe('useLearningItemsFeed', () => {
     feed.unmount();
   });
 
-  it('does not query while auth is unresolved', async () => {
+  // P7.3-I regression: reproduces the reported bug — an already-open webapp
+  // must reflect an external Firestore write (Chrome-extension save) live,
+  // with no reload, no route remount, and no user interaction.
+  it('updates the count live (2 -> 4) when an external write lands, with no reload or interaction', async () => {
+    const subs = stubSubscriptions();
+
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+    await act(async () => {
+      subs[0].emit(pageResult(['a', 'b'], null));
+    });
+    expect(feed.state().items).toHaveLength(2);
+
+    // The Chrome extension writes two more learning items directly to
+    // Firestore; the SAME onSnapshot listener fires again on its own.
+    await act(async () => {
+      subs[0].emit(pageResult(['c', 'd', 'a', 'b'], null));
+    });
+
+    expect(feed.state().items).toHaveLength(4);
+    expect(feed.state().items.map((i) => i.id)).toEqual(['c', 'd', 'a', 'b']);
+    // No fetch-based call was ever needed to pick up the change.
+    expect(listLearningItems).not.toHaveBeenCalled();
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
+
+    feed.unmount();
+  });
+
+  it('does not subscribe while auth is unresolved', async () => {
+    stubSubscriptions();
+
     const feed = mountFeed({ uid: 'u1', authResolved: false });
     await feed.mount();
     await feed.flush();
 
-    expect(listLearningItems).not.toHaveBeenCalled();
+    expect(subscribeToLearningItems).not.toHaveBeenCalled();
     feed.unmount();
   });
 
-  it('does not query when there is no signed-in user', async () => {
+  it('does not subscribe when there is no signed-in user', async () => {
+    stubSubscriptions();
+
     const feed = mountFeed({ uid: null, authResolved: true });
     await feed.mount();
     await feed.flush();
 
-    expect(listLearningItems).not.toHaveBeenCalled();
+    expect(subscribeToLearningItems).not.toHaveBeenCalled();
     expect(feed.state()).toEqual(initialLearningItemsFeedState);
     feed.unmount();
   });
 
   it('appends the next page in returned order on loadMore()', async () => {
-    listLearningItems.mockResolvedValueOnce(pageResult(['a'], 'c1'));
+    const subs = stubSubscriptions();
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
-    await feed.flush();
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], 'c1'));
+    });
 
     listLearningItems.mockResolvedValueOnce(pageResult(['b', 'c'], null));
     await act(async () => {
@@ -135,17 +204,19 @@ describe('useLearningItemsFeed', () => {
     });
     await feed.flush();
 
-    expect(listLearningItems).toHaveBeenNthCalledWith(2, { cursor: 'c1' });
+    expect(listLearningItems).toHaveBeenNthCalledWith(1, { cursor: 'c1' });
     expect(feed.state().items.map((i) => i.id)).toEqual(['a', 'b', 'c']);
     expect(feed.state().cursor).toBeNull();
     feed.unmount();
   });
 
   it('ignores a concurrent second loadMore() while one is pending', async () => {
-    listLearningItems.mockResolvedValueOnce(pageResult(['a'], 'c1'));
+    const subs = stubSubscriptions();
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
-    await feed.flush();
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], 'c1'));
+    });
 
     let resolveSecond!: (r: ListLearningItemsResult) => void;
     listLearningItems.mockReturnValueOnce(
@@ -160,9 +231,9 @@ describe('useLearningItemsFeed', () => {
     expect(feed.state().loadingMore).toBe(true);
 
     await act(async () => {
-      feed.loadMore(); // guarded — must not fire a 3rd request
+      feed.loadMore(); // guarded — must not fire a 2nd request
     });
-    expect(listLearningItems).toHaveBeenCalledTimes(2);
+    expect(listLearningItems).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveSecond(pageResult(['b'], null));
@@ -172,10 +243,12 @@ describe('useLearningItemsFeed', () => {
   });
 
   it('keeps already-loaded items when the next page fails', async () => {
-    listLearningItems.mockResolvedValueOnce(pageResult(['a'], 'c1'));
+    const subs = stubSubscriptions();
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
-    await feed.flush();
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], 'c1'));
+    });
 
     listLearningItems.mockRejectedValueOnce(new Error('network'));
     await act(async () => {
@@ -190,47 +263,96 @@ describe('useLearningItemsFeed', () => {
     feed.unmount();
   });
 
-  it('clears the list on sign-out and issues no further query', async () => {
-    listLearningItems.mockResolvedValue(pageResult(['a'], 'c1'));
+  it('unsubscribes on unmount', async () => {
+    const subs = stubSubscriptions();
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
-    await feed.flush();
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], null));
+    });
+
+    feed.unmount();
+
+    expect(subs[0].unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the list on sign-out, unsubscribes, and issues no further query', async () => {
+    const subs = stubSubscriptions();
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+    await act(async () => {
+      subs[0].emit(pageResult(['a'], 'c1'));
+    });
     expect(feed.state().items).toHaveLength(1);
 
-    listLearningItems.mockClear();
     await feed.set({ uid: null });
 
+    expect(subs[0].unsubscribe).toHaveBeenCalledTimes(1);
     expect(feed.state()).toEqual(initialLearningItemsFeedState);
     expect(listLearningItems).not.toHaveBeenCalled();
+
+    // A late emission from the torn-down subscription must never land —
+    // the reducer/generation guard is belt-and-suspenders on top of unsubscribe.
+    await act(async () => {
+      subs[0].emit(pageResult(['late'], null));
+    });
+    expect(feed.state()).toEqual(initialLearningItemsFeedState);
+
     feed.unmount();
   });
 
-  it('reloads a fresh first page on user switch and discards the previous user\'s late response', async () => {
-    let resolveFirstUser!: (r: ListLearningItemsResult) => void;
-    listLearningItems.mockReturnValueOnce(
-      new Promise<ListLearningItemsResult>((resolve) => {
-        resolveFirstUser = resolve;
-      })
-    );
+  it('unsubscribes the previous user\'s listener before subscribing for the new user (no duplicate subscriptions)', async () => {
+    const subs = stubSubscriptions();
+
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
+
+    await feed.set({ uid: 'u2' });
+
+    expect(subs[0].unsubscribe).toHaveBeenCalledTimes(1);
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(2);
+    expect(subs[1]).toBeDefined();
+    expect(subs[1].unsubscribe).not.toHaveBeenCalled();
+
+    feed.unmount();
+    expect(subs[1].unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads a fresh first page on user switch and discards the previous user's late emission", async () => {
+    const subs = stubSubscriptions();
 
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
 
-    // Switch before u1's first page resolves.
-    listLearningItems.mockResolvedValueOnce(pageResult(['b2'], null));
     await feed.set({ uid: 'u2' });
-    await feed.flush();
+    await act(async () => {
+      subs[1].emit(pageResult(['b2'], null));
+    });
 
     expect(feed.state().items.map((i) => i.id)).toEqual(['b2']);
     expect(feed.state().cursor).toBeNull();
 
-    // u1's stale response arrives — must be ignored.
+    // u1's listener is unsubscribed, but even if it fired late, it must be ignored.
     await act(async () => {
-      resolveFirstUser(pageResult(['a1'], 'cX'));
+      subs[0].emit(pageResult(['a1'], 'cX'));
     });
     expect(feed.state().items.map((i) => i.id)).toEqual(['b2']);
     expect(feed.state().cursor).toBeNull();
-    expect(listLearningItems).toHaveBeenCalledTimes(2);
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(2);
+    feed.unmount();
+  });
+
+  it('surfaces a subscription error as the error phase', async () => {
+    const subs = stubSubscriptions();
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+
+    await act(async () => {
+      subs[0].fail(new Error('permission-denied'));
+    });
+
+    expect(feed.state().phase).toBe('error');
     feed.unmount();
   });
 });
