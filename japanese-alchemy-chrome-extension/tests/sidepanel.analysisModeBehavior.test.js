@@ -1,3 +1,19 @@
+// sidepanel.js now imports JaAlchemyApiService directly (P7.3-F — it used to
+// read the bare `JaAlchemyApiService` global, which this file's many tests
+// still control by reassigning `global.JaAlchemyApiService` per scenario).
+// Rather than rewriting every one of those call sites, this mock proxies
+// construction through to whatever `global.JaAlchemyApiService` currently
+// points to, so all existing `global.JaAlchemyApiService = class {...}`
+// assignments below keep working unchanged.
+jest.mock('../src/scripts/jaAlchemyApiService.js', () => ({
+  __esModule: true,
+  default: class JaAlchemyApiServiceProxy {
+    constructor(...args) {
+      return new global.JaAlchemyApiService(...args);
+    }
+  },
+}));
+
 import {
   analizingSelectedText,
   handleCancelAnalysis,

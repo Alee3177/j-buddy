@@ -1,22 +1,15 @@
 // Import Firebase Functions
-import { initializeApp } from 'firebase/app';
-import { connectFunctionsEmulator, getFunctions, httpsCallable } from 'firebase/functions';
-import firebaseConfig from './firebaseConfig.js';
+import { httpsCallable } from 'firebase/functions';
+import { firebaseApp, firebaseFunctions } from './firebaseApp.js';
 import { buildRequestBody } from './requestBody.js';
 
 class JaAlchemyApiService {
   constructor() {
-    // Initialize Firebase app (singleton pattern)
-    if (!window.firebaseApp) {
-      window.firebaseApp = initializeApp(firebaseConfig);
-    }
-
-    // Initialize Firebase Functions
-    this.app = window.firebaseApp;
-    this.functions = getFunctions(this.app, 'us-central1'); // Use your region
-    if (process.env.NODE_ENV === 'development') {
-      connectFunctionsEmulator(this.functions, '127.0.0.1', 5001);
-    }
+    // Shared with authService.js via firebaseApp.js — same App/Functions
+    // instance, so httpsCallable auto-attaches the ID token from whatever
+    // currentUser authService established on this SAME Auth instance.
+    this.app = firebaseApp;
+    this.functions = firebaseFunctions;
   }
 
   /**
@@ -167,5 +160,8 @@ class JaAlchemyApiService {
   }
 }
 
-// Export the service
-window.JaAlchemyApiService = JaAlchemyApiService;
+// Export the service. Consumed by a direct ES import in sidepanel.js — no
+// longer a window global; jaAlchemyApiService is only ever bundled as part
+// of the sidepanel entry now (see webpack.config.js), so there is no other
+// context that needs it.
+export default JaAlchemyApiService;

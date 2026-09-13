@@ -25,9 +25,12 @@ function createWebpackConfig(_env, argv = {}) {
     entry: {
       background: './src/scripts/background.js',
       contentScript: './src/scripts/contentScript.js',
-      firebaseConfig: './src/scripts/firebaseConfig.js',
-      authService: './src/scripts/authService.js',
-      jaAlchemyApiService: './src/scripts/jaAlchemyApiService.js',
+      // authService and jaAlchemyApiService are no longer separate entries —
+      // as standalone webpack bundles they each got their own independent
+      // copy of @firebase/app's module registry, which is why the shared
+      // Firebase App/Auth/Functions instance in firebaseApp.js only actually
+      // ends up shared when both modules are part of THIS ONE entry's module
+      // graph (see firebaseApp.js's header comment / P7.3-E, P7.3-F).
       sidepanel: ['./src/sidepanel/sidepanel.js'],
       offscreen: './src/offscreen/offscreen.js',
     },
@@ -80,7 +83,7 @@ function createWebpackConfig(_env, argv = {}) {
       new HtmlWebpackPlugin({
         template: './src/sidepanel/sidepanel.html',
         filename: 'sidepanel.html',
-        chunks: ['firebaseConfig', 'authService', 'sidepanel', 'jaAlchemyApiService'],
+        chunks: ['sidepanel'],
         inject: true
       }),
       new CopyWebpackPlugin({

@@ -7,10 +7,10 @@
 // not an importable module, so its output shape is exercised here as the
 // message authService consumes, not tested at its own source).
 
-const mockInitializeApp = jest.fn();
-const mockGetAuth = jest.fn();
 const mockSignInWithCredential = jest.fn();
 const mockCredential = jest.fn();
+let mockAuthInstance;
+let mockFirebaseAppInstance;
 
 class MockGoogleAuthProvider {
   static credential(...args) {
@@ -18,12 +18,18 @@ class MockGoogleAuthProvider {
   }
 }
 
-jest.mock('firebase/app', () => ({
-  initializeApp: (...args) => mockInitializeApp(...args),
+// authService.js no longer calls initializeApp()/getAuth() itself — it
+// imports the already-created instances from firebaseApp.js (see P7.3-F).
+// mockAuthInstance/mockFirebaseAppInstance are reassigned in beforeEach
+// before each fresh `await import('../src/scripts/authService.js')`, which
+// (via jest.resetModules()) re-invokes this factory and picks up the
+// current values.
+jest.mock('../src/scripts/firebaseApp.js', () => ({
+  firebaseApp: mockFirebaseAppInstance,
+  firebaseAuth: mockAuthInstance,
 }));
 
 jest.mock('firebase/auth', () => ({
-  getAuth: (...args) => mockGetAuth(...args),
   signInWithCredential: (...args) => mockSignInWithCredential(...args),
   GoogleAuthProvider: MockGoogleAuthProvider,
   setPersistence: jest.fn(),
@@ -32,12 +38,9 @@ jest.mock('firebase/auth', () => ({
 
 describe('authService Google sign-in credential handshake', () => {
   let chromeMessageListener;
-  let mockAuthInstance;
 
   beforeEach(async () => {
     jest.resetModules();
-    mockInitializeApp.mockReset();
-    mockGetAuth.mockReset();
     mockSignInWithCredential.mockReset().mockResolvedValue(undefined);
     mockCredential.mockReset().mockImplementation((idToken, accessToken) => ({
       __mockCredential: true,
@@ -46,8 +49,7 @@ describe('authService Google sign-in credential handshake', () => {
     }));
 
     mockAuthInstance = { currentUser: null };
-    mockInitializeApp.mockReturnValue({});
-    mockGetAuth.mockReturnValue(mockAuthInstance);
+    mockFirebaseAppInstance = { __app: true };
 
     chromeMessageListener = null;
     global.chrome = {

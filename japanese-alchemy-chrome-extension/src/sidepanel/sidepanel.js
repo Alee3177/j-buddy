@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import createDOMPurify from 'dompurify';
 import authService from '../scripts/authService.js';
+import JaAlchemyApiService from '../scripts/jaAlchemyApiService.js';
 import {
     getPromptVariant,
     setPromptVariant,

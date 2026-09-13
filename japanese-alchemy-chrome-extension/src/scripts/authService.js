@@ -1,8 +1,7 @@
 // Authentication Service for Japanese Alchemy Chrome Extension
 // Manages Firebase Authentication with Google Sign-In
-import { getAuth, signInWithCredential, GoogleAuthProvider, setPersistence, browserSessionPersistence } from 'firebase/auth';
-import { initializeApp } from 'firebase/app';
-import firebaseConfig from './firebaseConfig.js';
+import { signInWithCredential, GoogleAuthProvider, setPersistence, browserSessionPersistence } from 'firebase/auth';
+import { firebaseApp, firebaseAuth } from './firebaseApp.js';
 
 class AuthService {
   constructor() {
@@ -10,16 +9,14 @@ class AuthService {
     this.isAuthenticated = false;
     this.offscreenDocumentId = null;
     this.isOffscreenDocumentReady = false;
-    this.firebaseApp = null;
-    this.auth = null;
+    // Shared with jaAlchemyApiService.js via firebaseApp.js — see that
+    // module's header comment for why this must be a single shared instance.
+    this.firebaseApp = firebaseApp;
+    this.auth = firebaseAuth;
     this.init();
   }
 
   async init() {
-    // Initialize Firebase App and Auth
-    this.firebaseApp = initializeApp(firebaseConfig);
-    this.auth = getAuth(this.firebaseApp);
-    
     // Load user from storage
     await this.loadUserFromStorage();
     
