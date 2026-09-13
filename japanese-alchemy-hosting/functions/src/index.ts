@@ -15,7 +15,9 @@ import { explainRuntimeOptions } from "./runtimeOptions";
 // The configSecret object is passed to the secrets parameter.
 // LLM-backed callables share cost-ceiling runtime options (see
 // runtimeOptions.ts); saveItems is auth-gated and not LLM-backed, so it is
-// left on defaults.
+// left on defaults. saveItems never reads configSecret (no getConfig() call
+// in its handler), so it intentionally does NOT bind it — that keeps it
+// deployable independently of JAPANESE_ALCHEMY_CONFIG.
 export const explain = onCall(
   { ...explainRuntimeOptions, secrets: [configSecret] },
   explainHandler
@@ -26,7 +28,4 @@ export const explainStreamCallable = onCall(
   explainStreamCallableHandler
 );
 
-export const saveItems = onCall(
-  { secrets: [configSecret] },
-  saveItemsHandler
-);
+export const saveItems = onCall(saveItemsHandler);
