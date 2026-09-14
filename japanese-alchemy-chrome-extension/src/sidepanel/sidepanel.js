@@ -154,6 +154,43 @@ function parseTaxonomyBulletSection(section) {
     return items;
 }
 
+/**
+ * P8-C1: escape plain text for direct HTML embedding (not markdown — the
+ * translation pre-stage's output is plain text by contract, so it is never
+ * run through marked.js / convertToRuby). Newlines become <br> so multi-line
+ * source/translations still read correctly; no other transformation is
+ * applied, preserving punctuation and the exact string content.
+ */
+function escapeForNaturalJapaneseDisplay(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+}
+
+/**
+ * P8-C1: presentation-only 原文 / 自然日文 sections for zh/en input, built
+ * directly from the multilingual pre-stage contract (never regenerated or
+ * paraphrased) and prepended ahead of the existing (unmodified) analysis
+ * HTML. Deliberately NOT spliced into the markdown/`response` that feeds
+ * Copy / Save-As / Firestore — those stay byte-identical to pre-P8-C1
+ * output; this only augments what the side panel displays (and its own
+ * local re-render cache, via analysisResult.html).
+ */
+function prependNaturalJapaneseSections(html, preStage) {
+    // No class/id attributes: the same sanitizeCachedAnalysisHtml() DOMPurify
+    // pass the rest of the analysis HTML goes through only allows a fixed tag
+    // set with colspan/href/rowspan/title attributes, so anything else here
+    // would just be stripped back out.
+    const original = escapeForNaturalJapaneseDisplay(preStage.originalContent);
+    const natural = escapeForNaturalJapaneseDisplay(preStage.analysisContent);
+    const sections =
+        `<h3>原文</h3><p>${original}</p>` +
+        `<h3>自然日文</h3><p>${natural}</p>`;
+    return `${sections}${html}`;
+}
+
 // Function to format the analysis result using marked.js
 export function formatAnalysisResult(markdown) {
     // Handle null/undefined input
@@ -725,6 +762,12 @@ export async function analizingSelectedText(selectedText, context = { before: ''
 
                 console.log('Generating response (streaming)...');
                 let firstChunkReceived = false;
+                // P8-C1: the multilingual pre-stage contract, captured from
+                // onPreStage below and consumed once in onDone to prepend the
+                // 原文 / 自然日文 presentation sections. Stays null on the
+                // Japanese fast path (the callable never sends this chunk),
+                // so onDone's augmentation is skipped entirely there.
+                let capturedPreStage = null;
 
                 const streamArgs = [selectedTextForRequest, promptVariant, contextForRequest];
                 analysisController = new AbortController();
@@ -863,6 +906,17 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             json: normalizedJson,
                             response: enrichedText,
                         };
+                        // P8-C1: only for zh/en (capturedPreStage stays null on
+                        // the Japanese fast path — the callable never sends
+                        // this chunk there). Augments ONLY the displayed/cached
+                        // `.html`; `.response`/`enrichedText` above (Copy,
+                        // Save-As, Firestore rendered_markdown) is untouched.
+                        if (capturedPreStage?.translated) {
+                            analysisResult.html = prependNaturalJapaneseSections(
+                                analysisResult.html,
+                                capturedPreStage
+                            );
+                        }
                         const completedProjection = createCompletedAnalysisProjection(
                             cacheKey,
                             enrichedText,
@@ -917,6 +971,14 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             if (status === 'translating') {
                                 setLoadingMessage(loadingElement, '「日本語に変換しています…」');
                             }
+                        },
+                        // P8-C1: one-shot multilingual pre-stage contract, sent
+                        // after translation completes and before analysis
+                        // streaming begins. Captured here and consumed once in
+                        // onDone above — never fires on the Japanese fast path.
+                        onPreStage: (preStage) => {
+                            if (!isLatestAnalysis(requestId)) return;
+                            capturedPreStage = preStage;
                         },
                     }
                 );

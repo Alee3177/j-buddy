@@ -9,12 +9,15 @@ import { logger } from "../utils/logger";
 import { validateExplainRequest } from "./requestValidation";
 import { checkRateLimit } from "./rateLimiter";
 import {
+  PreStageResult,
   runMultilingualPreStage,
   TranslationFailedError,
   UnsupportedLanguageError,
 } from "./multilingualPreStage";
 
-export async function explainHandler(request: any): Promise<SuccessResponse> {
+export async function explainHandler(
+  request: any
+): Promise<SuccessResponse & { preStage?: PreStageResult }> {
   logger.setContext(request);
 
   const data = request.data as ExplainRequest;
@@ -73,7 +76,12 @@ export async function explainHandler(request: any): Promise<SuccessResponse> {
       completed: true,
     });
     logger.info("Explain request completed successfully");
-    return completion.response;
+    // P8-C1: same contract as the streaming callable's preStage chunk —
+    // present only when translation actually happened (zh/en), so a batch
+    // consumer can show the generated Japanese translation. Absent (not
+    // present as undefined) for the Japanese fast path: byte-identical to
+    // pre-P8-C1 response shape.
+    return preStage.translated ? { ...completion.response, preStage } : completion.response;
   } catch (error) {
     if (error instanceof UnsupportedLanguageError) {
       logger.warn(`Rejected unsupported source language: ${error.detectedLanguage}`);

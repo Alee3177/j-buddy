@@ -320,6 +320,171 @@ describe('sidepanel analysis-mode behavior', () => {
     });
   });
 
+  describe('P8-C1 natural Japanese presentation', () => {
+    function chineseBenchmark001() {
+      return {
+        originalContent: '美國 Prismacolor Premier 霹靂馬色鉛筆/油性（單支）\n#103~#997 單色下標區',
+        analysisContent: '米国Prismacolor Premier（プリズマカラー・プレミア）の油性色鉛筆（単色・1本売り）#103～#997 各色から選択可能',
+      };
+    }
+
+    test('zh input renders 原文 + 自然日文 ahead of the existing analysis', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      const { originalContent, analysisContent } = chineseBenchmark001();
+
+      const analysisPromise = analizingSelectedText(originalContent, {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent,
+        analysisContent,
+        translated: true,
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      // Newlines in the original text render as <br> (plain text, not markdown).
+      const displayedOriginal = originalContent.replace(/\n/g, '<br>');
+      expect(prose.innerHTML).toContain('原文');
+      expect(prose.innerHTML).toContain(displayedOriginal);
+      expect(prose.innerHTML).toContain('自然日文');
+      expect(prose.innerHTML).toContain(analysisContent);
+      expect(prose.innerHTML).toContain('成長');
+
+      const originalIdx = prose.innerHTML.indexOf(displayedOriginal);
+      const naturalIdx = prose.innerHTML.indexOf(analysisContent);
+      const wordsIdx = prose.innerHTML.indexOf('成長');
+      expect(originalIdx).toBeGreaterThanOrEqual(0);
+      expect(naturalIdx).toBeGreaterThan(originalIdx);
+      expect(wordsIdx).toBeGreaterThan(naturalIdx);
+    });
+
+    test('en input renders 原文 + 自然日文 ahead of the existing analysis', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      const originalContent = 'Hello there, how are you doing today?';
+      const analysisContent = 'こんにちは、今日の調子はいかがですか。';
+
+      const analysisPromise = analizingSelectedText(originalContent, {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'en',
+        originalContent,
+        analysisContent,
+        translated: true,
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>調子\ncondition');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).toContain('原文');
+      expect(prose.innerHTML).toContain(originalContent);
+      expect(prose.innerHTML).toContain('自然日文');
+      expect(prose.innerHTML).toContain(analysisContent);
+      expect(prose.innerHTML).toContain('調子');
+    });
+
+    test('ja input does not render a 自然日文 section (onPreStage never fires)', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+
+      const analysisPromise = analizingSelectedText('成長を後押しする', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      // Mirrors production: the callable never sends a preStage chunk on the
+      // Japanese fast path, so onPreStage is simply never invoked here.
+      apiCalls[0].onChunk('分析', '分析');
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).not.toContain('自然日文');
+      expect(prose.innerHTML).not.toContain('原文');
+      expect(prose.innerHTML).toContain('成長');
+    });
+
+    test('the displayed originalContent matches the pre-stage contract exactly', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      const originalContent = '这是一段包含標點、換行\n與空格 的測試文字！？';
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent,
+        analysisContent: 'これはテストです。',
+        translated: true,
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      // Newlines become <br> for display; everything else (including full-width
+      // punctuation) must appear byte-for-byte, unparaphrased.
+      const expectedDisplayed = originalContent.replace(/\n/g, '<br>');
+      expect(prose.innerHTML).toContain(expectedDisplayed);
+    });
+
+    test('analysisContent is displayed exactly once', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      const analysisContent = 'これは一意な自然日文のテストです。';
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent: '这是一个测试',
+        analysisContent,
+        translated: true,
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      const occurrences = prose.innerHTML.split(analysisContent).length - 1;
+      expect(occurrences).toBe(1);
+    });
+
+    test('streaming and the translating-status UX still work alongside the pre-stage presentation', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose, loadingMessage } = setupElements();
+      const originalContent = '这是一个测试';
+      const analysisContent = 'これはテストです。';
+
+      const analysisPromise = analizingSelectedText(originalContent, {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onStatus('translating');
+      expect(loadingMessage.textContent).toBe('「日本語に変換しています…」');
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent,
+        analysisContent,
+        translated: true,
+      });
+
+      apiCalls[0].onChunk('分析結果', '分析結果');
+      expect(loadingMessage.textContent).toBe('已收到分析結果，正在整理版面…');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).toContain('自然日文');
+      expect(prose.innerHTML).toContain(analysisContent);
+      expect(prose.innerHTML).toContain('成長');
+    });
+  });
+
   test('mode switch persists v1 without starting analysis for the current selection', async () => {
     const text = '成長を後押しする';
     const context = { before: '制度が', after: 'という。' };

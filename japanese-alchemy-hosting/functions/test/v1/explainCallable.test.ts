@@ -161,5 +161,31 @@ describe("explainHandler", () => {
       expect(analysisMessage).toBe(translated);
       expect(analysisMessage).not.toBe(source);
     });
+
+    it("P8-C1: attaches the pre-stage contract to the response when translation happened", async () => {
+      const source = "这是一个测试";
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果", timestamp: 0 } });
+
+      const result = await explainHandler({ data: { content: source } } as any);
+
+      expect(result.preStage).toEqual({
+        detectedLanguage: "zh",
+        originalContent: source,
+        analysisContent: "これはテストです",
+        translated: true,
+      });
+      expect(result.data).toBe("分析結果");
+    });
+
+    it("P8-C1: omits the pre-stage field entirely for the Japanese fast path", async () => {
+      mockChatCompletion.mockResolvedValueOnce({ response: { success: true, data: "分析結果", timestamp: 0 } });
+
+      const result = await explainHandler({ data: { content: "テストです" } } as any);
+
+      expect(result.preStage).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result, "preStage")).toBe(false);
+    });
   });
 });

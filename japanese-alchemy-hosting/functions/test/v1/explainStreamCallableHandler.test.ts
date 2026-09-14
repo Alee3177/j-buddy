@@ -127,6 +127,58 @@ describe("explainStreamCallableHandler", () => {
       expect(result).toEqual({ success: true });
     });
 
+    it("P8-C1: sends the full pre-stage contract once, after translation and before analysis streaming", async () => {
+      mockChatCompletion.mockResolvedValue({ response: { success: true, data: "これはテストです" } });
+      mockStreamCompletion.mockResolvedValue({ response: readableSseResponse([
+        'data: {"choices":[{"delta":{"content":"分析"}}]}\n',
+        "data: [DONE]\n",
+      ]), requestedModel: "gemini-3-flash-preview" });
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+      const source = "这是一个测试";
+
+      await explainStreamCallableHandler(
+        { data: { content: source }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      const preStageChunkCalls = response.sendChunk.mock.calls.filter(
+        ([chunk]: [any]) => chunk.preStage !== undefined
+      );
+      expect(preStageChunkCalls).toHaveLength(1);
+      const [preStageChunk] = preStageChunkCalls[0];
+      expect(preStageChunk).toEqual({
+        content: "",
+        preStage: {
+          detectedLanguage: "zh",
+          originalContent: source,
+          analysisContent: "これはテストです",
+          translated: true,
+        },
+      });
+
+      // Ordering: status -> preStage -> analysis delta.
+      const chunkOrder = response.sendChunk.mock.calls.map(([chunk]: [any]) =>
+        chunk.status ?? (chunk.preStage ? "preStage" : chunk.content)
+      );
+      expect(chunkOrder).toEqual(["translating", "preStage", "分析"]);
+    });
+
+    it("P8-C1: sends no pre-stage chunk on the Japanese fast path (contract unchanged)", async () => {
+      mockStreamCompletion.mockResolvedValue({ response: readableSseResponse([
+        'data: {"choices":[{"delta":{"content":"分"}}]}\n',
+        "data: [DONE]\n",
+      ]), requestedModel: "gemini-3-flash-preview" });
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      await explainStreamCallableHandler(
+        { data: { content: "テストです" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+      expect(response.sendChunk).not.toHaveBeenCalledWith(expect.objectContaining({ preStage: expect.anything() }));
+    });
+
     it("fails loudly with a clean error when translation fails, without starting the analysis stream", async () => {
       mockChatCompletion.mockRejectedValue(new Error("provider unavailable"));
       const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };

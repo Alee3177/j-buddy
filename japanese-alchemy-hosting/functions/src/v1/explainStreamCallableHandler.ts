@@ -10,6 +10,7 @@ import { isParsedBodyTooLarge, validateExplainRequest } from "./requestValidatio
 import { checkRateLimit, rateLimitKey } from "./rateLimiter";
 import { consumeLlmStream } from "./llmStreamDeltas";
 import {
+  PreStageResult,
   runMultilingualPreStage,
   TranslationFailedError,
   UnsupportedLanguageError,
@@ -24,6 +25,13 @@ interface StreamChunk {
   // extension) is unaffected — reading `status` for a UI treatment is a
   // forward-compatible follow-up, not required by this phase.
   status?: "translating";
+  // P8-C1: the full multilingual pre-stage contract, sent once (never
+  // per-delta) immediately after translation completes and before analysis
+  // streaming begins — only when translation actually happened (zh/en).
+  // `content` stays "" here too, so it is a no-op for a client that only
+  // reads `content`. Lets a client show the generated Japanese translation
+  // without re-deriving or duplicating it into every chunk.
+  preStage?: PreStageResult;
 }
 
 interface CallableStreamResult {
@@ -99,6 +107,15 @@ export async function explainStreamCallableHandler(
     // place. Translation itself is never streamed — it must fully complete
     // before analysis streaming begins.
     const preStage = await runMultilingualPreStage(content, llmService);
+
+    // P8-C1: expose the pre-stage contract once, right after translation
+    // completes, so the client can present the generated Japanese
+    // translation ahead of the (unmodified) analysis stream. Skipped
+    // entirely for the Japanese fast path (translated === false) — nothing
+    // new is sent, and today's behavior is byte-identical.
+    if (preStage.translated && request.acceptsStreaming && response) {
+      await response.sendChunk({ content: "", preStage });
+    }
 
     const completion = await llmService.streamCompletion(
       systemPrompt,

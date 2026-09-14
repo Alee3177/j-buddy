@@ -98,6 +98,92 @@ describe('JaAlchemyApiService', () => {
     expect(onDone).toHaveBeenCalledWith('分析');
   });
 
+  test('P8-C1: surfaces a preStage chunk via onPreStage without appending its empty content', async () => {
+    const preStagePayload = {
+      detectedLanguage: 'zh',
+      originalContent: '这是一个测试',
+      analysisContent: 'これはテストです',
+      translated: true,
+    };
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { content: '', status: 'translating' };
+          yield { content: '', preStage: preStagePayload };
+          yield { content: '分' };
+          yield { content: '析' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onChunk = jest.fn();
+    const onDone = jest.fn();
+    const onStatus = jest.fn();
+    const onPreStage = jest.fn();
+
+    await new JaAlchemyApiService().generateResponseStream(
+      '这是一个测试', 'v2', undefined, onChunk, onDone, jest.fn(), { onStatus, onPreStage }
+    );
+
+    expect(onPreStage).toHaveBeenCalledTimes(1);
+    expect(onPreStage).toHaveBeenCalledWith(preStagePayload);
+    expect(onChunk).toHaveBeenNthCalledWith(1, '分', '分');
+    expect(onChunk).toHaveBeenNthCalledWith(2, '析', '分析');
+    expect(onChunk).toHaveBeenCalledTimes(2);
+    expect(onDone).toHaveBeenCalledWith('分析');
+  });
+
+  test('P8-C1: never calls onPreStage for a Japanese fast-path stream (no preStage chunk sent)', async () => {
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { content: '分' };
+          yield { content: '析' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onPreStage = jest.fn();
+
+    await new JaAlchemyApiService().generateResponseStream(
+      'テストです', 'v2', undefined, jest.fn(), jest.fn(), jest.fn(), { onPreStage }
+    );
+
+    expect(onPreStage).not.toHaveBeenCalled();
+  });
+
+  test('P8-C1: tolerates a missing onPreStage callback when a preStage chunk arrives', async () => {
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield {
+            content: '',
+            preStage: {
+              detectedLanguage: 'en', originalContent: 'hi', analysisContent: 'こんにちは', translated: true,
+            },
+          };
+          yield { content: '分' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onChunk = jest.fn();
+
+    await expect(
+      new JaAlchemyApiService().generateResponseStream(
+        'hi', 'v2', undefined, onChunk, jest.fn(), jest.fn()
+      )
+    ).resolves.toBeUndefined();
+
+    expect(onChunk).toHaveBeenCalledWith('分', '分');
+  });
+
   test('P8-B: never calls onStatus for a Japanese fast-path stream (no status chunk sent)', async () => {
     const callable = jest.fn();
     callable.stream = jest.fn(async () => ({

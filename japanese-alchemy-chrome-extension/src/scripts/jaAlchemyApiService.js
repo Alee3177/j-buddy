@@ -59,13 +59,18 @@ class JaAlchemyApiService {
    * @param {function} onChunk - Callback invoked with each text chunk
    * @param {function} onDone - Callback invoked with the full accumulated text after callable success
    * @param {function} onError - Callback invoked with an error message on failure
-   * @param {{ signal?: AbortSignal, onStatus?: (status: string) => void }} [options] - cancellation
-   *   options for the callable request. `onStatus` (P8-B) is invoked for a non-content status marker
-   *   the callable can send ahead of analysis (currently only "translating", emitted once when
-   *   non-Japanese source text is being translated before analysis begins) — it never fires for the
-   *   Japanese fast path.
+   * @param {{
+   *   signal?: AbortSignal,
+   *   onStatus?: (status: string) => void,
+   *   onPreStage?: (preStage: { detectedLanguage: string, originalContent: string, analysisContent: string, translated: boolean }) => void,
+   * }} [options] - cancellation options for the callable request. `onStatus` (P8-B) is invoked for a
+   *   non-content status marker the callable can send ahead of analysis (currently only "translating",
+   *   emitted once when non-Japanese source text is being translated before analysis begins) — it never
+   *   fires for the Japanese fast path. `onPreStage` (P8-C1) is invoked once, after translation completes
+   *   and before analysis streaming begins, with the full multilingual pre-stage contract — also never
+   *   fires for the Japanese fast path (translated === false is never sent over the wire at all).
    */
-  async generateResponseStream(selectedText, promptVersion, context, onChunk, onDone, onError, { signal, onStatus } = {}) {
+  async generateResponseStream(selectedText, promptVersion, context, onChunk, onDone, onError, { signal, onStatus, onPreStage } = {}) {
     let fullText = '';
     try {
       if (signal?.aborted) {
@@ -96,6 +101,12 @@ class JaAlchemyApiService {
         // analysis text.
         if (chunk?.status) {
           onStatus?.(chunk.status);
+        }
+        // P8-C1: the one-shot pre-stage contract (also empty-content) —
+        // surface it via onPreStage so the UI can present the generated
+        // Japanese translation without re-deriving it.
+        if (chunk?.preStage) {
+          onPreStage?.(chunk.preStage);
         }
         if (!chunk?.content) continue;
         console.log('[Firebase API] Received chunk:', chunk.content);
