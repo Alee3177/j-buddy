@@ -11,15 +11,16 @@ import { WelcomeCard } from '@/components/WelcomeCard';
 import { EmptyState } from '@/components/EmptyState';
 import { shouldShowWelcomeCard } from '@/lib/welcomeCard';
 import {
-  getUserVocabularies,
-  getUserGrammars,
-  getUserAnalysisPages,
+  subscribeToUserVocabularies,
+  subscribeToUserGrammars,
+  subscribeToUserAnalysisPages,
   deleteAnalysisPage,
   getSharedAnalysisPages,
   getSharedVocabularies,
   getSharedGrammars,
 } from '@/services/firestoreService';
 import { useLearningItemsFeed } from '@/lib/learningItemsFeed';
+import { useUserCollectionFeed } from '@/lib/userCollectionFeed';
 import { LearningItemsPanel } from '@/components/LearningItemsPanel';
 import { useReviewSession } from '@/lib/reviewSession';
 import { useReviewCardKeys } from '@/lib/reviewCardKeys';
@@ -78,13 +79,32 @@ export default function Dashboard() {
   const { user, loading, signOut } = useAuth();
   const router = useRouter();
   
-  const [vocabularies, setVocabularies] = useState<Vocabulary[]>([]);
-  const [grammars, setGrammars] = useState<Grammar[]>([]);
-  const [analysisPages, setAnalysisPages] = useState<AnalysisPage[]>([]);
   const [sharedAnalysisPages, setSharedAnalysisPages] = useState<AnalysisPage[]>([]);
   const [sharedVocabularies, setSharedVocabularies] = useState<Vocabulary[]>([]);
   const [sharedGrammars, setSharedGrammars] = useState<Grammar[]>([]);
   const [activeTab, setActiveTab] = useState('vocabularies');
+
+  // Japanese Reader P7.3-I — personal 單字/文法/頁面, live via onSnapshot, so a
+  // Chrome-extension save updates these tabs/counts in an already-open webapp
+  // without a reload. See lib/userCollectionFeed.ts for the shared lifecycle
+  // rules (auth-gated, unsubscribes on sign-out/uid change/unmount).
+  const authResolved = !loading;
+  const uid = user?.uid ?? null;
+  const vocabularies = useUserCollectionFeed<Vocabulary>(
+    uid,
+    authResolved,
+    subscribeToUserVocabularies
+  );
+  const grammars = useUserCollectionFeed<Grammar>(
+    uid,
+    authResolved,
+    subscribeToUserGrammars
+  );
+  const analysisPages = useUserCollectionFeed<AnalysisPage>(
+    uid,
+    authResolved,
+    subscribeToUserAnalysisPages
+  );
 
   // Japanese Reader v0.4 P2.2 — read-only personal learning-items feed.
   // Driven by the auth lifecycle: no query before auth resolves, cleared on
@@ -111,45 +131,24 @@ export default function Dashboard() {
 
   useEffect(() => {
     let loadingData = true;
-    const loadData = async () => {
+    const loadSharedData = async () => {
       try {
-        if (user) {
-          const [
-            vocabData, grammarData, pagesData,
-            sharedPagesData, sharedVocabData, sharedGrammarData,
-          ] = await Promise.all([
-            getUserVocabularies(user.uid),
-            getUserGrammars(user.uid),
-            getUserAnalysisPages(user.uid),
-            getSharedAnalysisPages(),
-            getSharedVocabularies(),
-            getSharedGrammars(),
-          ]);
-          if (!loadingData) return;
-          setVocabularies(vocabData);
-          setGrammars(grammarData);
-          setAnalysisPages(pagesData);
-          setSharedAnalysisPages(sharedPagesData);
-          setSharedVocabularies(sharedVocabData);
-          setSharedGrammars(sharedGrammarData);
-        } else {
-          const [sharedPagesData, sharedVocabData, sharedGrammarData] = await Promise.all([
-            getSharedAnalysisPages(),
-            getSharedVocabularies(),
-            getSharedGrammars(),
-          ]);
-          if (!loadingData) return;
-          setSharedAnalysisPages(sharedPagesData);
-          setSharedVocabularies(sharedVocabData);
-          setSharedGrammars(sharedGrammarData);
-        }
+        const [sharedPagesData, sharedVocabData, sharedGrammarData] = await Promise.all([
+          getSharedAnalysisPages(),
+          getSharedVocabularies(),
+          getSharedGrammars(),
+        ]);
+        if (!loadingData) return;
+        setSharedAnalysisPages(sharedPagesData);
+        setSharedVocabularies(sharedVocabData);
+        setSharedGrammars(sharedGrammarData);
       } catch (error) {
-        console.error('Error loading data:', error);
+        console.error('Error loading shared data:', error);
       }
     };
 
     if (!loading) {
-      void loadData();
+      void loadSharedData();
     }
     return () => {
       loadingData = false;
@@ -167,8 +166,9 @@ export default function Dashboard() {
 
   const handleDeleteAnalysisPage = async (pageId: string) => {
     if (!user) return;
+    // No optimistic local update needed: analysisPages is a live onSnapshot
+    // feed, so the deletion is reflected automatically once it commits.
     await deleteAnalysisPage(user.uid, pageId);
-    setAnalysisPages((pages) => pages.filter((page) => page.id !== pageId));
   };
 
   if (loading) {

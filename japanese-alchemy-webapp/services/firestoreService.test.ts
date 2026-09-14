@@ -29,6 +29,9 @@ import {
   getSharedGrammars,
   listLearningItems,
   subscribeToLearningItems,
+  subscribeToUserVocabularies,
+  subscribeToUserGrammars,
+  subscribeToUserAnalysisPages,
   encodeLearningItemsCursor,
   decodeLearningItemsCursor,
 } from './firestoreService';
@@ -620,6 +623,104 @@ describe('subscribeToLearningItems', () => {
     firestore.onSnapshot.mockReturnValue(unsubscribe);
 
     const result = subscribeToLearningItems(undefined, vi.fn(), vi.fn());
+    result();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+// P7.3-I — live variants of the personal 單字/文法/頁面 reads, replacing the
+// one-shot getUserVocabularies / getUserGrammars / getUserAnalysisPages.
+describe.each([
+  {
+    label: 'vocabularies',
+    subscribe: subscribeToUserVocabularies,
+    subcollection: 'vocabularies',
+  },
+  {
+    label: 'grammars',
+    subscribe: subscribeToUserGrammars,
+    subcollection: 'grammars',
+  },
+  {
+    label: 'analysis pages',
+    subscribe: subscribeToUserAnalysisPages,
+    subcollection: 'analysis_pages',
+  },
+])('subscribeToUser$label', ({ subscribe, subcollection }) => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    firestore.doc.mockImplementation((...segments: unknown[]) => ({
+      path: segments.slice(1).join('/'),
+    }));
+    firestore.collection.mockImplementation((...segments: unknown[]) => ({ segments }));
+    firestore.query.mockImplementation((...parts: unknown[]) => ({ parts }));
+    firestore.orderBy.mockReturnValue({ order: 'createdAt' });
+    firestore.onSnapshot.mockReturnValue(vi.fn());
+  });
+
+  it(`subscribes to users/{userId}/${subcollection} ordered by createdAt desc`, () => {
+    subscribe('alice', vi.fn(), vi.fn());
+
+    expect(firestore.doc).toHaveBeenCalledWith({ name: 'db' }, 'users', 'alice');
+    expect(firestore.collection).toHaveBeenCalledWith(
+      { path: 'users/alice' },
+      subcollection
+    );
+    expect(firestore.orderBy).toHaveBeenCalledWith('createdAt', 'desc');
+    expect(firestore.onSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps each snapshot to a fresh array, live (not just once)', () => {
+    const onData = vi.fn();
+    let handler: (snapshot: { docs: unknown[] }) => void = () => {};
+    firestore.onSnapshot.mockImplementation((_q: unknown, cb: typeof handler) => {
+      handler = cb;
+      return vi.fn();
+    });
+
+    subscribe('alice', onData, vi.fn());
+
+    handler({
+      docs: [{ id: 'x', data: () => ({ createdAt: 1 }) }],
+    });
+    expect(onData).toHaveBeenNthCalledWith(1, [
+      expect.objectContaining({ id: 'x' }),
+    ]);
+
+    // External write lands — the same listener fires again with 2 rows.
+    handler({
+      docs: [
+        { id: 'x', data: () => ({ createdAt: 1 }) },
+        { id: 'y', data: () => ({ createdAt: 2 }) },
+      ],
+    });
+    expect(onData).toHaveBeenCalledTimes(2);
+    expect(onData.mock.calls[1][0]).toHaveLength(2);
+  });
+
+  it('forwards listener errors to onError', () => {
+    const onError = vi.fn();
+    let errorHandler: (error: unknown) => void = () => {};
+    firestore.onSnapshot.mockImplementation(
+      (_q: unknown, _cb: unknown, errCb: typeof errorHandler) => {
+        errorHandler = errCb;
+        return vi.fn();
+      }
+    );
+
+    subscribe('alice', vi.fn(), onError);
+    const boom = new Error('permission-denied');
+    errorHandler(boom);
+
+    expect(onError).toHaveBeenCalledWith(boom);
+  });
+
+  it('returns the underlying unsubscribe function', () => {
+    const unsubscribe = vi.fn();
+    firestore.onSnapshot.mockReturnValue(unsubscribe);
+
+    const result = subscribe('alice', vi.fn(), vi.fn());
     result();
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);

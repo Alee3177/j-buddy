@@ -47,52 +47,95 @@ const timestampToDate = (timestamp: Timestamp | Date | number): Date => {
   return new Date(timestamp);
 };
 
-export async function getUserVocabularies(userId: string): Promise<Vocabulary[]> {
+/**
+ * P7.3-I — live variant of the (now-removed) one-shot `getUserVocabularies` /
+ * `getUserGrammars` / `getUserAnalysisPages`. All three personal subcollections
+ * share the same shape (owner-scoped, ordered by createdAt desc, no
+ * pagination), so the subscription plumbing is shared here and each caller
+ * below only supplies the subcollection name and the doc→entity mapping.
+ *
+ * `onData` fires with the full current list on the initial snapshot AND again
+ * on every subsequent Firestore change (e.g. a Chrome-extension save), so an
+ * open webapp reflects external writes without a reload.
+ */
+function subscribeToUserSubcollection<T>(
+  userId: string,
+  subcollectionName: string,
+  mapDoc: (id: string, data: Record<string, unknown>) => T,
+  onData: (items: T[]) => void,
+  onError: (error: unknown) => void
+): Unsubscribe {
   const db = requireDb();
   const userDocRef = doc(db, 'users', userId);
   const q = query(
-    collection(userDocRef, VOCABULARIES_SUBCOLLECTION),
+    collection(userDocRef, subcollectionName),
     orderBy('createdAt', 'desc')
   );
-  
-  const querySnapshot = await getDocs(q);
-  return querySnapshot.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-    createdAt: timestampToDate(d.data().createdAt as Timestamp),
-  })) as Vocabulary[];
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      onData(snapshot.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>)));
+    },
+    onError
+  );
 }
 
-export async function getUserGrammars(userId: string): Promise<Grammar[]> {
-  const db = requireDb();
-  const userDocRef = doc(db, 'users', userId);
-  const q = query(
-    collection(userDocRef, GRAMMARS_SUBCOLLECTION),
-    orderBy('createdAt', 'desc')
+export function subscribeToUserVocabularies(
+  userId: string,
+  onData: (items: Vocabulary[]) => void,
+  onError: (error: unknown) => void
+): Unsubscribe {
+  return subscribeToUserSubcollection<Vocabulary>(
+    userId,
+    VOCABULARIES_SUBCOLLECTION,
+    (id, data) =>
+      ({
+        id,
+        ...data,
+        createdAt: timestampToDate(data.createdAt as Timestamp),
+      }) as Vocabulary,
+    onData,
+    onError
   );
- 
-  const querySnapshot = await getDocs(q);
-  return querySnapshot.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-    createdAt: timestampToDate(d.data().createdAt as Timestamp),
-  })) as Grammar[];
 }
 
-export async function getUserAnalysisPages(userId: string): Promise<AnalysisPage[]> {
-  const db = requireDb();
-  const userDocRef = doc(db, 'users', userId);
-  const q = query(
-    collection(userDocRef, ANALYSIS_PAGES_SUBCOLLECTION),
-    orderBy('createdAt', 'desc')
+export function subscribeToUserGrammars(
+  userId: string,
+  onData: (items: Grammar[]) => void,
+  onError: (error: unknown) => void
+): Unsubscribe {
+  return subscribeToUserSubcollection<Grammar>(
+    userId,
+    GRAMMARS_SUBCOLLECTION,
+    (id, data) =>
+      ({
+        id,
+        ...data,
+        createdAt: timestampToDate(data.createdAt as Timestamp),
+      }) as Grammar,
+    onData,
+    onError
   );
+}
 
-  const querySnapshot = await getDocs(q);
-  return querySnapshot.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-    createdAt: timestampToDate(d.data().createdAt as Timestamp),
-  })) as AnalysisPage[];
+export function subscribeToUserAnalysisPages(
+  userId: string,
+  onData: (items: AnalysisPage[]) => void,
+  onError: (error: unknown) => void
+): Unsubscribe {
+  return subscribeToUserSubcollection<AnalysisPage>(
+    userId,
+    ANALYSIS_PAGES_SUBCOLLECTION,
+    (id, data) =>
+      ({
+        id,
+        ...data,
+        createdAt: timestampToDate(data.createdAt as Timestamp),
+      }) as AnalysisPage,
+    onData,
+    onError
+  );
 }
 
 export async function deleteAnalysisPage(userId: string, pageId: string): Promise<void> {
