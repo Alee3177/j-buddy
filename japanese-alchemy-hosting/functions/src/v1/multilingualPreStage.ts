@@ -1,8 +1,10 @@
 import { LlmService } from "../services/llmService";
 import { DetectedLanguage, detectLanguage } from "../services/languageDetection";
-import { TRANSLATION_SYSTEM_PROMPT } from "../models/translationPrompt";
+import { buildTranslationSystemPrompt } from "../models/translationPrompt";
+import { DEFAULT_TRANSLATION_STYLE, TranslationStyle } from "../models/translationStyle";
 
 export type { DetectedLanguage };
+export type { TranslationStyle };
 
 // Translated Japanese output can legitimately exceed the original-input
 // ceiling (MAX_CONTENT_LENGTH in requestValidation.ts) — e.g. a Chinese
@@ -17,6 +19,11 @@ export interface PreStageResult {
   originalContent: string;
   analysisContent: string;
   translated: boolean;
+  // P8-C2: the style actually used (or that would have applied — ja always
+  // carries the resolved value even though it has no effect there). Lets a
+  // client pick the matching translated-section label (自然日文/新聞日文/
+  // 商務日文) without re-deriving it.
+  translationStyle: TranslationStyle;
 }
 
 /** Thrown when the source language is not one the pipeline supports (P8 scope: ja/zh/en only). */
@@ -66,16 +73,25 @@ export class TranslationFailedError extends Error {
  */
 export async function runMultilingualPreStage(
   content: string,
-  llmService: LlmService
+  llmService: LlmService,
+  // P8-C2: optional — the ONLY place an omitted style is resolved to
+  // "natural". Callers (explainHandler, explainStreamCallableHandler) just
+  // pass whatever validateExplainRequest already accepted through as-is.
+  translationStyle: TranslationStyle = DEFAULT_TRANSLATION_STYLE
 ): Promise<PreStageResult> {
   const detectedLanguage = detectLanguage(content);
 
   if (detectedLanguage === "ja") {
+    // P8-C2: translationStyle has no behavioral effect here — it is never
+    // read again below, so an ignored/unsupported value sent for Japanese
+    // input cannot affect anything. Still reported back for contract
+    // consistency with the zh/en case.
     return {
       detectedLanguage,
       originalContent: content,
       analysisContent: content,
       translated: false,
+      translationStyle,
     };
   }
 
@@ -85,7 +101,10 @@ export async function runMultilingualPreStage(
 
   let translated: string;
   try {
-    const completion = await llmService.chatCompletion(TRANSLATION_SYSTEM_PROMPT, content);
+    const completion = await llmService.chatCompletion(
+      buildTranslationSystemPrompt(translationStyle),
+      content
+    );
     translated = typeof completion.response?.data === "string" ? completion.response.data.trim() : "";
   } catch (error) {
     throw new TranslationFailedError(
@@ -114,5 +133,6 @@ export async function runMultilingualPreStage(
     originalContent: content,
     analysisContent: translated,
     translated: true,
+    translationStyle,
   };
 }

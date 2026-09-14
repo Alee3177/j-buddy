@@ -3,7 +3,7 @@ import { explainHandler } from "../../src/v1/explainCallable";
 import { checkRateLimit } from "../../src/v1/rateLimiter";
 import { SYSTEM_PROMPT_V1 } from "../../src/models/systemPromptV1";
 import { SYSTEM_PROMPT_V2 } from "../../src/models/systemPromptV2";
-import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
+import { buildTranslationSystemPrompt } from "../../src/models/translationPrompt";
 import { RetryableProviderError } from "../../src/services/httpRetry";
 import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "../../src/v1/providerBusyMessages";
 
@@ -115,7 +115,7 @@ describe("explainHandler", () => {
       await explainHandler({ data: { content: "这是一个测试" } } as any);
 
       expect(mockChatCompletion).toHaveBeenCalledTimes(2);
-      expect(mockChatCompletion.mock.calls[0]).toEqual([TRANSLATION_SYSTEM_PROMPT, "这是一个测试"]);
+      expect(mockChatCompletion.mock.calls[0]).toEqual([buildTranslationSystemPrompt("natural"), "这是一个测试"]);
       expect(mockChatCompletion.mock.calls[1][1]).toBe("これはテストです");
     });
 
@@ -127,7 +127,10 @@ describe("explainHandler", () => {
       await explainHandler({ data: { content: "Hello there, how are you" } } as any);
 
       expect(mockChatCompletion).toHaveBeenCalledTimes(2);
-      expect(mockChatCompletion.mock.calls[0]).toEqual([TRANSLATION_SYSTEM_PROMPT, "Hello there, how are you"]);
+      expect(mockChatCompletion.mock.calls[0]).toEqual([
+        buildTranslationSystemPrompt("natural"),
+        "Hello there, how are you",
+      ]);
       expect(mockChatCompletion.mock.calls[1][1]).toBe("こんにちは");
     });
 
@@ -177,6 +180,7 @@ describe("explainHandler", () => {
         originalContent: source,
         analysisContent: "これはテストです",
         translated: true,
+        translationStyle: "natural",
       });
       expect(result.data).toBe("分析結果");
     });
@@ -251,6 +255,119 @@ describe("explainHandler", () => {
         code: "internal",
         message: "Translation to Japanese failed. Please try again.",
       });
+    });
+  });
+
+  describe("P8-C2 translation style control", () => {
+    it("omitted translationStyle defaults to natural", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler({ data: { content: "这是一个测试" } } as any);
+
+      expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt("natural"));
+      expect(result.preStage?.translationStyle).toBe("natural");
+    });
+
+    it.each(["natural", "news", "business"] as const)(
+      "%s is accepted and routed to the matching style-specific translation prompt",
+      async (style) => {
+        mockChatCompletion
+          .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+          .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+        const result = await explainHandler(
+          { data: { content: "这是一个测试", translationStyle: style } } as any
+        );
+
+        expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt(style));
+        expect(result.preStage?.translationStyle).toBe(style);
+      }
+    );
+
+    it("rejects an invalid translationStyle without calling the LLM", async () => {
+      await expect(
+        explainHandler({ data: { content: "这是一个测试", translationStyle: "casual" } } as any)
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("batch handler propagates translationStyle through to the analysis stage unaffected (style only touches translation)", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler({ data: { content: "这是一个测试", translationStyle: "business" } } as any);
+
+      // The analysis-stage call always uses the (unmodified) Japanese
+      // Analyzer prompt — style is a translation-only concern.
+      expect(mockChatCompletion.mock.calls[1][0]).toBe(SYSTEM_PROMPT_V2);
+      expect(mockChatCompletion.mock.calls[1][1]).toBe("これはテストです");
+    });
+
+    it("zh + business translates before the Analyzer runs", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "業務日本語の翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "这是一个测试", translationStyle: "business" } } as any
+      );
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.preStage).toEqual({
+        detectedLanguage: "zh",
+        originalContent: "这是一个测试",
+        analysisContent: "業務日本語の翻訳結果",
+        translated: true,
+        translationStyle: "business",
+      });
+    });
+
+    it("zh + news translates before the Analyzer runs", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "ニュース日本語の翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "这是一个测试", translationStyle: "news" } } as any
+      );
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.preStage?.translationStyle).toBe("news");
+      expect(result.preStage?.analysisContent).toBe("ニュース日本語の翻訳結果");
+    });
+
+    it.each(["business", "news"] as const)(
+      "en + %s translates before the Analyzer runs",
+      async (style) => {
+        mockChatCompletion
+          .mockResolvedValueOnce({ response: { success: true, data: "日本語の翻訳結果" } })
+          .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+        const result = await explainHandler(
+          { data: { content: "Hello there, how are you", translationStyle: style } } as any
+        );
+
+        expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+        expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt(style));
+        expect(result.preStage?.translated).toBe(true);
+        expect(result.preStage?.translationStyle).toBe(style);
+      }
+    );
+
+    it("ja fast-path ignores an explicit translationStyle and makes no translation call", async () => {
+      mockChatCompletion.mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "テストです", translationStyle: "business" } } as any
+      );
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+      expect(mockChatCompletion).toHaveBeenCalledWith(SYSTEM_PROMPT_V2, "テストです");
+      expect(result.preStage).toBeUndefined();
     });
   });
 });

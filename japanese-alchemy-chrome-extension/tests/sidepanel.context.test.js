@@ -34,7 +34,7 @@ describe('buildContextCacheKey', () => {
   test('empty/absent context reduces to the versioned managed-source key + bare selectedText', () => {
     // The version and source prefix distinguish a post-personal-provider cache
     // entry from any old Gemini-only response.
-    const expected = `cgv3s9|managed:0${String.fromCharCode(1)}テスト`;
+    const expected = `cgv4s9|managed:0${String.fromCharCode(1)}テスト`;
     expect(buildContextCacheKey({ selectedText: 'テスト', context: { before: '', after: '' } })).toBe(expected);
     expect(buildContextCacheKey({ selectedText: 'テスト', context: {} })).toBe(expected);
     expect(buildContextCacheKey({ selectedText: 'テスト' })).toBe(expected);
@@ -62,7 +62,7 @@ describe('buildContextCacheKey', () => {
       selectedText: '猫',
       context: { before: 'hello', after: 'world' },
     });
-    const prefix = `cgv3s9|managed:0${String.fromCharCode(1)}`;
+    const prefix = `cgv4s9|managed:0${String.fromCharCode(1)}`;
     expect(withCtx.startsWith(prefix)).toBe(true);
     expect(withCtx.charCodeAt(prefix.length)).toBe(0); // NUL sentinel after version + source
     // A selectedText that literally resembles the serialized form still reduces
@@ -79,14 +79,14 @@ describe('buildContextCacheKey', () => {
     // never serve a stale pre-engine response.
     const noCtxNew = buildContextCacheKey({ selectedText: 'テスト' });
     expect(noCtxNew).not.toBe('テスト');
-    expect(noCtxNew.startsWith('cgv3')).toBe(true);
+    expect(noCtxNew.startsWith('cgv4')).toBe(true);
 
     const withCtxNew = buildContextCacheKey({
       selectedText: '猫',
       context: { before: 'hello', after: 'world' },
     });
     expect(withCtxNew.charCodeAt(0)).not.toBe(0); // old context form began with NUL
-    expect(withCtxNew.startsWith('cgv3')).toBe(true);
+    expect(withCtxNew.startsWith('cgv4')).toBe(true);
   });
 
   test('prompt variant separates cached results for the same selection and context', () => {
@@ -110,7 +110,40 @@ describe('buildContextCacheKey', () => {
     expect(buildContextCacheKey({ selectedText: 'テスト', promptVariant: 'v2' })).not.toBe(
       buildContextCacheKey({ selectedText: 'テスト' })
     );
-    expect(buildContextCacheKey({ selectedText: 'テスト' })).toBe(`cgv3s9|managed:0${String.fromCharCode(1)}テスト`);
+    expect(buildContextCacheKey({ selectedText: 'テスト' })).toBe(`cgv4s9|managed:0${String.fromCharCode(1)}テスト`);
+  });
+
+  test('P8-C2: translation style separates cached results for the same selection and context', () => {
+    const natural = buildContextCacheKey({
+      selectedText: '这是一个测试',
+      translationStyle: 'natural',
+    });
+    const business = buildContextCacheKey({
+      selectedText: '这是一个测试',
+      translationStyle: 'business',
+    });
+
+    expect(natural).not.toBe(business);
+    expect(natural).toContain('natural');
+    expect(business).toContain('business');
+  });
+
+  test('P8-C2: translation style preserves the old no-style cache key when omitted', () => {
+    expect(buildContextCacheKey({ selectedText: 'テスト', translationStyle: 'natural' })).not.toBe(
+      buildContextCacheKey({ selectedText: 'テスト' })
+    );
+    expect(buildContextCacheKey({ selectedText: 'テスト' })).toBe(`cgv4s9|managed:0${String.fromCharCode(1)}テスト`);
+  });
+
+  test('P8-C2: translation style combines independently with prompt variant', () => {
+    const a = buildContextCacheKey({ selectedText: 'テスト', promptVariant: 'v2', translationStyle: 'news' });
+    const b = buildContextCacheKey({ selectedText: 'テスト', promptVariant: 'v2', translationStyle: 'business' });
+    const c = buildContextCacheKey({ selectedText: 'テスト', promptVariant: 'v1', translationStyle: 'news' });
+
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toContain('v2');
+    expect(a).toContain('news');
   });
 
   test('ignores legacy provider values and cannot reuse a cgv1 key', () => {
@@ -118,7 +151,7 @@ describe('buildContextCacheKey', () => {
     const zai = buildContextCacheKey({ selectedText: 'テスト', ai: 'zai' });
 
     expect(gemini).toBe(zai);
-    expect(gemini).toBe(`cgv3s9|managed:0${String.fromCharCode(1)}テスト`);
+    expect(gemini).toBe(`cgv4s9|managed:0${String.fromCharCode(1)}テスト`);
     expect(gemini).not.toBe('cgv1a3|zai' + String.fromCharCode(1) + 'テスト');
   });
 

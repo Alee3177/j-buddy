@@ -10,13 +10,18 @@
  * @param {string} content - the selected text (analysis target)
  * @param {string} promptVersion - "v1" | "v2"
  * @param {{ before?: string, after?: string }} [context]
- * @returns {{ content: string, prompt: string, context_before?: string, context_after?: string }}
+ * @param {"natural"|"news"|"business"} [translationStyle] - P8-C2: only affects
+ *   zh/en source text that goes through translation; omitted entirely when not
+ *   provided so the server's own "natural" default applies (backward compatible
+ *   request shape when a caller doesn't pass one).
+ * @returns {{ content: string, prompt: string, context_before?: string, context_after?: string, translationStyle?: string }}
  */
-export function buildRequestBody(content, promptVersion, context) {
+export function buildRequestBody(content, promptVersion, context, translationStyle) {
   const body = { content, prompt: promptVersion || 'v2' };
   const before = context && context.before;
   const after = context && context.after;
   if (before) body.context_before = before;
   if (after) body.context_after = after;
+  if (translationStyle) body.translationStyle = translationStyle;
   return body;
 }

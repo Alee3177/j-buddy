@@ -483,4 +483,51 @@ describe('JaAlchemyApiService', () => {
       ).rejects.toThrow('Firebase saveItems 函式失敗：network disconnected');
     });
   });
+
+  describe('P8-C2 translation style propagation', () => {
+    test('generateResponseStream includes translationStyle in the streamed request body', async () => {
+      const callable = jest.fn();
+      callable.stream = jest.fn(async () => ({
+        stream: { async *[Symbol.asyncIterator]() {} },
+        data: Promise.resolve({ success: true }),
+      }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponseStream(
+        '这是一个测试', 'v2', undefined, jest.fn(), jest.fn(), jest.fn(), { translationStyle: 'business' }
+      );
+
+      expect(callable.stream).toHaveBeenCalledWith(
+        { content: '这是一个测试', prompt: 'v2', translationStyle: 'business' },
+        { signal: undefined }
+      );
+    });
+
+    test('generateResponseStream omits translationStyle when not provided (backward compatible)', async () => {
+      const callable = jest.fn();
+      callable.stream = jest.fn(async () => ({
+        stream: { async *[Symbol.asyncIterator]() {} },
+        data: Promise.resolve({ success: true }),
+      }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponseStream(
+        'テストです', 'v2', undefined, jest.fn(), jest.fn(), jest.fn()
+      );
+
+      expect(callable.stream).toHaveBeenCalledWith(
+        { content: 'テストです', prompt: 'v2' },
+        { signal: undefined }
+      );
+    });
+
+    test('generateResponse includes translationStyle in the batch request body', async () => {
+      const callable = jest.fn(async () => ({ data: { success: true, data: 'result' } }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponse('这是一个测试', 'v2', undefined, 'news');
+
+      expect(callable).toHaveBeenCalledWith({ content: '这是一个测试', prompt: 'v2', translationStyle: 'news' });
+    });
+  });
 });

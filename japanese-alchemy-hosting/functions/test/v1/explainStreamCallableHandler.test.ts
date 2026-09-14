@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 import { explainStreamCallableHandler } from "../../src/v1/explainStreamCallableHandler";
 import { checkRateLimit } from "../../src/v1/rateLimiter";
-import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
+import { buildTranslationSystemPrompt } from "../../src/models/translationPrompt";
 import { RetryableProviderError } from "../../src/services/httpRetry";
 import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "../../src/v1/providerBusyMessages";
 
@@ -122,7 +122,7 @@ describe("explainStreamCallableHandler", () => {
         response as any
       );
 
-      expect(mockChatCompletion).toHaveBeenCalledWith(TRANSLATION_SYSTEM_PROMPT, "这是一个测试");
+      expect(mockChatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt("natural"), "这是一个测试");
       expect(response.sendChunk).toHaveBeenCalledWith({ content: "", status: "translating" });
       expect(mockStreamCompletion).toHaveBeenCalledWith(expect.any(String), "これはテストです");
       expect(response.sendChunk).toHaveBeenCalledWith({ content: "分析" });
@@ -155,6 +155,7 @@ describe("explainStreamCallableHandler", () => {
           originalContent: source,
           analysisContent: "これはテストです",
           translated: true,
+          translationStyle: "natural",
         },
       });
 
@@ -270,6 +271,153 @@ describe("explainStreamCallableHandler", () => {
         success: false,
         error: "Translation to Japanese failed. Please try again.",
       });
+    });
+  });
+
+  describe("P8-C2 translation style control", () => {
+    function sseResponse() {
+      return {
+        response: readableSseResponse([
+          'data: {"choices":[{"delta":{"content":"分析"}}]}\n',
+          "data: [DONE]\n",
+        ]),
+        requestedModel: "gemini-3-flash-preview",
+      };
+    }
+
+    it("omitted translationStyle defaults to natural", async () => {
+      mockChatCompletion.mockResolvedValue({ response: { success: true, data: "これはテストです" } });
+      mockStreamCompletion.mockResolvedValue(sseResponse());
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      await explainStreamCallableHandler(
+        { data: { content: "这是一个测试" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(mockChatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt("natural"), "这是一个测试");
+    });
+
+    it.each(["natural", "news", "business"] as const)(
+      "%s is accepted and routed to the matching style-specific translation prompt",
+      async (style) => {
+        mockChatCompletion.mockResolvedValue({ response: { success: true, data: "これはテストです" } });
+        mockStreamCompletion.mockResolvedValue(sseResponse());
+        const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+        await explainStreamCallableHandler(
+          {
+            data: { content: "这是一个测试", translationStyle: style },
+            acceptsStreaming: true,
+            rawRequest: { ip: "127.0.0.1" },
+          } as any,
+          response as any
+        );
+
+        expect(mockChatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt(style), "这是一个测试");
+      }
+    );
+
+    it("rejects an invalid translationStyle without calling the LLM or starting a stream", async () => {
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      await expect(
+        explainStreamCallableHandler(
+          {
+            data: { content: "这是一个测试", translationStyle: "casual" },
+            acceptsStreaming: true,
+            rawRequest: { ip: "127.0.0.1" },
+          } as any,
+          response as any
+        )
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+      expect(mockStreamCompletion).not.toHaveBeenCalled();
+    });
+
+    it("streaming handler propagates translationStyle to the shared pre-stage (preStage chunk carries it)", async () => {
+      mockChatCompletion.mockResolvedValue({ response: { success: true, data: "商務日本語の翻訳結果" } });
+      mockStreamCompletion.mockResolvedValue(sseResponse());
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      await explainStreamCallableHandler(
+        {
+          data: { content: "这是一个测试", translationStyle: "business" },
+          acceptsStreaming: true,
+          rawRequest: { ip: "127.0.0.1" },
+        } as any,
+        response as any
+      );
+
+      const preStageChunkCalls = response.sendChunk.mock.calls.filter(
+        ([chunk]: [any]) => chunk.preStage !== undefined
+      );
+      const [preStageChunk] = preStageChunkCalls[0] as [any];
+      expect(preStageChunk.preStage).toEqual({
+        detectedLanguage: "zh",
+        originalContent: "这是一个测试",
+        analysisContent: "商務日本語の翻訳結果",
+        translated: true,
+        translationStyle: "business",
+      });
+    });
+
+    it("zh + news translates before the Analyzer streaming begins", async () => {
+      mockChatCompletion.mockResolvedValue({ response: { success: true, data: "ニュース日本語の翻訳結果" } });
+      mockStreamCompletion.mockResolvedValue(sseResponse());
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      await explainStreamCallableHandler(
+        {
+          data: { content: "这是一个测试", translationStyle: "news" },
+          acceptsStreaming: true,
+          rawRequest: { ip: "127.0.0.1" },
+        } as any,
+        response as any
+      );
+
+      expect(mockStreamCompletion).toHaveBeenCalledWith(expect.any(String), "ニュース日本語の翻訳結果");
+    });
+
+    it.each(["business", "news"] as const)(
+      "en + %s translates before the Analyzer streaming begins",
+      async (style) => {
+        mockChatCompletion.mockResolvedValue({ response: { success: true, data: "日本語の翻訳結果" } });
+        mockStreamCompletion.mockResolvedValue(sseResponse());
+        const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+        await explainStreamCallableHandler(
+          {
+            data: { content: "Hello there, how are you", translationStyle: style },
+            acceptsStreaming: true,
+            rawRequest: { ip: "127.0.0.1" },
+          } as any,
+          response as any
+        );
+
+        expect(mockChatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt(style), "Hello there, how are you");
+        expect(mockStreamCompletion).toHaveBeenCalledWith(expect.any(String), "日本語の翻訳結果");
+      }
+    );
+
+    it("ja fast-path ignores an explicit translationStyle, makes no translation call, and sends no preStage chunk", async () => {
+      mockStreamCompletion.mockResolvedValue(sseResponse());
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      const result = await explainStreamCallableHandler(
+        {
+          data: { content: "テストです", translationStyle: "business" },
+          acceptsStreaming: true,
+          rawRequest: { ip: "127.0.0.1" },
+        } as any,
+        response as any
+      );
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+      expect(response.sendChunk).not.toHaveBeenCalledWith(expect.objectContaining({ status: "translating" }));
+      expect(response.sendChunk).not.toHaveBeenCalledWith(expect.objectContaining({ preStage: expect.anything() }));
+      expect(result).toEqual({ success: true });
     });
   });
 });

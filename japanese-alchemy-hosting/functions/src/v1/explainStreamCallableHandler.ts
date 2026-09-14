@@ -82,7 +82,7 @@ export async function explainStreamCallableHandler(
     throw callableErrorForRateLimit(rateLimit.reason);
   }
 
-  const { content, prompt = "v2", context_before, context_after } = request.data as any;
+  const { content, prompt = "v2", context_before, context_after, translationStyle } = request.data as any;
   const systemPrompt = prompt === "v2" ? SYSTEM_PROMPT_V2 : SYSTEM_PROMPT_V1;
 
   try {
@@ -108,7 +108,7 @@ export async function explainStreamCallableHandler(
     // explainHandler so detection/translation logic lives in exactly one
     // place. Translation itself is never streamed — it must fully complete
     // before analysis streaming begins.
-    const preStage = await runMultilingualPreStage(content, llmService);
+    const preStage = await runMultilingualPreStage(content, llmService, translationStyle);
 
     // P8-C1: expose the pre-stage contract once, right after translation
     // completes, so the client can present the generated Japanese

@@ -90,6 +90,28 @@ describe("validateExplainRequest", () => {
     expect(validateExplainRequest({ content: "テスト", ai: "zai" }).ok).toBe(true);
     expect(validateExplainRequest({ content: "テスト", ai: "other" }).ok).toBe(false);
   });
+
+  describe("P8-C2 translationStyle", () => {
+    it("accepts an absent translationStyle (optional)", () => {
+      expect(validateExplainRequest({ content: "テスト" }).ok).toBe(true);
+    });
+
+    it.each(["natural", "news", "business"])("accepts translationStyle=%s", (translationStyle) => {
+      expect(validateExplainRequest({ content: "テスト", translationStyle }).ok).toBe(true);
+    });
+
+    it("rejects an invalid translationStyle", () => {
+      const r = validateExplainRequest({ content: "テスト", translationStyle: "casual" });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(400);
+    });
+
+    it("rejects a non-string translationStyle", () => {
+      const r = validateExplainRequest({ content: "テスト", translationStyle: 123 });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(400);
+    });
+  });
 });
 
 describe("isBodyTooLarge", () => {

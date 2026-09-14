@@ -106,8 +106,13 @@ export function extractSurroundingContext(selection, opts) {
  * version no longer matches, so an upgraded client never serves a pre-engine
  * cached response. It also prevents provider-specific entries written before
  * the Gemini-only client flow from being reused.
+ *
+ * cgv4 (P8-C2): the key now also folds in translationStyle, so re-analyzing
+ * identical text+context under a different style is never mistaken for the
+ * same cached result — bumped so a pre-P8-C2 key (no style component) can
+ * never collide with today's key shape.
  */
-const CACHE_VERSION = 'cgv3';
+const CACHE_VERSION = 'cgv4';
 
 /**
  * Build a stable cache key for an analysis so the result cache invalidates when
@@ -125,10 +130,14 @@ const CACHE_VERSION = 'cgv3';
  * non-secret profile revision (for example, `managed:0` or `personal:3`). It
  * ensures identical text analysed by two different providers cannot share a
  * response cache entry, without ever putting an API key in localStorage.
- * @param {{ selectedText?: string, promptVariant?: string, sourceIdentity?: string, context?: { before?: string, after?: string } }} entry
+ *
+ * `translationStyle` (P8-C2) is folded in the same way as `promptVariant`:
+ * re-analyzing identical text+context under a different style must never
+ * reuse the previous style's cached result.
+ * @param {{ selectedText?: string, promptVariant?: string, sourceIdentity?: string, context?: { before?: string, after?: string }, translationStyle?: string }} entry
  * @returns {string}
  */
-export function buildContextCacheKey({ selectedText, context, promptVariant, sourceIdentity } = {}) {
+export function buildContextCacheKey({ selectedText, context, promptVariant, sourceIdentity, translationStyle } = {}) {
   const text = selectedText || '';
   const before = (context && context.before) || '';
   const after = (context && context.after) || '';
@@ -137,12 +146,14 @@ export function buildContextCacheKey({ selectedText, context, promptVariant, sou
   const NUL = String.fromCharCode(0);
   const SOH = String.fromCharCode(1);
   const variant = promptVariant || '';
+  const style = translationStyle || '';
   const source = typeof sourceIdentity === 'string' && sourceIdentity
     ? sourceIdentity
     : 'managed:0';
   const cachePrefix = CACHE_VERSION
     + 's' + source.length + '|' + source + SOH
-    + (variant ? 'p' + variant.length + '|' + variant + SOH : '');
+    + (variant ? 'p' + variant.length + '|' + variant + SOH : '')
+    + (style ? 't' + style.length + '|' + style + SOH : '');
   if (!before && !after) return cachePrefix + text;
   return (
     cachePrefix +

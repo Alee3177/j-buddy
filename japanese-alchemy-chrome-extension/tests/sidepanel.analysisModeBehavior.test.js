@@ -20,6 +20,8 @@ import {
   handleSaveForLater,
   handleAnalysisModeChange,
   handleSidepanelStorageChanges,
+  handleTranslationStyleChange,
+  initializeTranslationStyle,
   isValidSelection,
   setSidepanelElementsForTesting,
 } from '../src/sidepanel/sidepanel.js';
@@ -82,9 +84,11 @@ function setupElements() {
   const cancelAnalysisButton = { hidden: true };
   const analyzeButton = { disabled: true };
   const pendingSelectionStatus = { textContent: '' };
+  const translationStyleSelect = { value: 'natural' };
   const elements = {
     alertMessage,
     analysisModeButtons: [compactButton, usageButton],
+    translationStyleSelect,
     cancelAnalysisButton,
     analyzeButton,
     pendingSelectionStatus,
@@ -117,6 +121,7 @@ function setupElements() {
     result,
     saveAsBtn,
     saveForLaterBtn,
+    translationStyleSelect,
     usageButton,
   };
 }
@@ -482,6 +487,160 @@ describe('sidepanel analysis-mode behavior', () => {
       expect(prose.innerHTML).toContain('自然日文');
       expect(prose.innerHTML).toContain(analysisContent);
       expect(prose.innerHTML).toContain('成長');
+    });
+  });
+
+  describe('P8-C2 translation style control', () => {
+    test('the selector defaults to natural (自然) on init', async () => {
+      const { translationStyleSelect, elements } = setupElements();
+      setupStorage({});
+
+      await initializeTranslationStyle(elements);
+
+      expect(translationStyleSelect.value).toBe('natural');
+    });
+
+    test('the selector reflects a previously-persisted style on init', async () => {
+      const { translationStyleSelect, elements } = setupElements();
+      setupStorage({ translationStyle: 'business' });
+
+      await initializeTranslationStyle(elements);
+
+      expect(translationStyleSelect.value).toBe('business');
+    });
+
+    test('changing the selector persists the style and does not start analysis', async () => {
+      const apiCalls = setupDeferredApi();
+      const { elements, translationStyleSelect } = setupElements();
+      const storage = setupStorage({});
+
+      await handleTranslationStyleChange(elements, 'news');
+
+      expect(storage.translationStyle).toBe('news');
+      expect(translationStyleSelect.value).toBe('news');
+      expect(apiCalls).toHaveLength(0);
+    });
+
+    test('an invalid style is rejected without mutating storage or the selector', async () => {
+      const { elements, translationStyleSelect } = setupElements();
+      const storage = setupStorage({ translationStyle: 'natural' });
+      translationStyleSelect.value = 'natural';
+
+      await handleTranslationStyleChange(elements, 'casual');
+
+      expect(storage.translationStyle).toBe('natural');
+      expect(translationStyleSelect.value).toBe('natural');
+    });
+
+    test('the next analysis request sends the currently-selected style', async () => {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      setupStorage({ translationStyle: 'business' });
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      expect(apiCalls[0].options.translationStyle).toBe('business');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+    });
+
+    test('an explicit options.translationStyle overrides the persisted selector value', async () => {
+      const apiCalls = setupDeferredApi();
+      setupElements();
+      setupStorage({ translationStyle: 'business' });
+
+      const analysisPromise = analizingSelectedText(
+        '这是一个测试', {}, { promptVariant: 'v2', translationStyle: 'news' }
+      );
+      await flushMicrotasks();
+
+      expect(apiCalls[0].options.translationStyle).toBe('news');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+    });
+
+    test('the translated-section label matches the style reported by the server (news)', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      setupStorage({ translationStyle: 'news' });
+      const analysisContent = 'ニュース文体の翻訳結果';
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent: '这是一个测试',
+        analysisContent,
+        translated: true,
+        translationStyle: 'news',
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).toContain('新聞日文');
+      expect(prose.innerHTML).not.toContain('自然日文');
+      expect(prose.innerHTML).not.toContain('商務日文');
+      expect(prose.innerHTML).toContain(analysisContent);
+    });
+
+    test('the translated-section label matches the style reported by the server (business)', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose } = setupElements();
+      setupStorage({ translationStyle: 'business' });
+      const analysisContent = '商務文体の翻訳結果';
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onPreStage({
+        detectedLanguage: 'zh',
+        originalContent: '这是一个测试',
+        analysisContent,
+        translated: true,
+        translationStyle: 'business',
+      });
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).toContain('商務日文');
+      expect(prose.innerHTML).not.toContain('自然日文');
+      expect(prose.innerHTML).not.toContain('新聞日文');
+      expect(prose.innerHTML).toContain(analysisContent);
+    });
+
+    test('Japanese input ignores an explicit non-default style: no status, no preStage, no translated section', async () => {
+      const apiCalls = setupDeferredApi();
+      const { prose, loadingMessage } = setupElements();
+
+      const analysisPromise = analizingSelectedText(
+        '成長を後押しする', {}, { promptVariant: 'v2', translationStyle: 'business' }
+      );
+      await flushMicrotasks();
+
+      // Mirrors production: the callable never sends status/preStage chunks
+      // on the Japanese fast path, regardless of the requested style.
+      apiCalls[0].onChunk('分析', '分析');
+      expect(loadingMessage.textContent).not.toContain('日本語に変換しています');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(prose.innerHTML).not.toContain('自然日文');
+      expect(prose.innerHTML).not.toContain('新聞日文');
+      expect(prose.innerHTML).not.toContain('商務日文');
+      expect(prose.innerHTML).not.toContain('原文');
+      expect(prose.innerHTML).toContain('成長');
+      // The request itself still carries the requested style (server ignores it).
+      expect(apiCalls[0].options.translationStyle).toBe('business');
     });
   });
 

@@ -53,10 +53,45 @@ describe('buildRequestBody', () => {
     expect(buildRequestBody('テスト', 'v1')).toEqual({ content: 'テスト', prompt: 'v1' });
   });
 
-  test('never serializes a legacy provider argument', () => {
-    expect(buildRequestBody('テスト', 'v2', undefined, 'zai')).toEqual({
+  // P8-C2: the 4th positional parameter was previously an inert legacy "ai
+  // provider" argument (always ignored); it is now translationStyle. This
+  // test name/assertion is intentionally updated rather than kept as a
+  // stale "must ignore the 4th arg" check.
+  test('omitted translationStyle → no translationStyle key (backward compatible)', () => {
+    expect(buildRequestBody('テスト', 'v2', undefined)).toEqual({
       content: 'テスト',
       prompt: 'v2',
+    });
+  });
+
+  describe('P8-C2 translationStyle', () => {
+    it.each(['natural', 'news', 'business'])('includes translationStyle=%s when provided', (style) => {
+      expect(buildRequestBody('テスト', 'v2', undefined, style)).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        translationStyle: style,
+      });
+    });
+
+    test('omits translationStyle when falsy', () => {
+      expect(buildRequestBody('テスト', 'v2', undefined, '')).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+      });
+      expect(buildRequestBody('テスト', 'v2', undefined, undefined)).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+      });
+    });
+
+    test('combines with context fields', () => {
+      expect(buildRequestBody('テスト', 'v2', { before: '前', after: '後' }, 'business')).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        context_before: '前',
+        context_after: '後',
+        translationStyle: 'business',
+      });
     });
   });
 });

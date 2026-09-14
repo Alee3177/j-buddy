@@ -34,7 +34,7 @@ export async function explainHandler(
   }
 
   // Defaults match the Chrome extension and streaming callable.
-  const { content, prompt = "v2", context_before, context_after } = data;
+  const { content, prompt = "v2", context_before, context_after, translationStyle } = data;
 
   // Per-IP rate limit (parity with explainStreamCallable). The callable's client IP is
   // on the underlying Express request.
@@ -61,7 +61,7 @@ export async function explainHandler(
     // existing (unmodified) Japanese Analyzer runs. Shared with
     // explainStreamCallableHandler so detection/translation logic lives in
     // exactly one place.
-    const preStage = await runMultilingualPreStage(content, llmService);
+    const preStage = await runMultilingualPreStage(content, llmService, translationStyle);
 
     const completion = await llmService.chatCompletion(
       systemPrompt,

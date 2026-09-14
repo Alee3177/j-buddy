@@ -291,6 +291,25 @@
       color: white;
     }
 
+    .translation-style-select {
+      height: 34px;
+      padding: 0 6px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      max-width: 72px;
+    }
+
+    .translation-style-select:hover {
+      color: var(--text-primary);
+      border-color: var(--button-bg);
+    }
+
     .theme-toggle, .external-link-button {
       width: 36px;
       height: 36px;
@@ -734,6 +753,16 @@
         </label>
       </div>
       <div class="controls-right">
+        <select
+          id="translationStyleSelect"
+          class="translation-style-select"
+          title="翻譯風格（日文原文不受影響）"
+          aria-label="翻譯風格（日文原文不受影響）"
+        >
+          <option value="natural" selected>自然</option>
+          <option value="news">新聞</option>
+          <option value="business">商務</option>
+        </select>
         <div class="analysis-mode-toggle" role="group" aria-label="分析模式">
           <button class="analysis-mode-option" type="button" data-prompt-variant="v1" title="快速理解目前選取的日文" aria-pressed="false">精簡分析</button>
           <button class="analysis-mode-option selected" type="button" data-prompt-variant="v2" title="重點放在搭配、例句和可重複使用的句型" aria-pressed="true">造句分析</button>

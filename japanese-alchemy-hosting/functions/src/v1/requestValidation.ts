@@ -1,4 +1,5 @@
 import { MAX_CONTEXT_CHARS } from "../models/analysisMessage";
+import { isValidTranslationStyle, TRANSLATION_STYLES } from "../models/translationStyle";
 
 export const MIN_CONTENT_LENGTH = 2;
 export const MAX_CONTENT_LENGTH = 500;
@@ -64,6 +65,18 @@ export function validateExplainRequest(body: unknown): ValidationResult {
   const ai = (body as any)?.ai;
   if (ai !== undefined && ai !== "gemini" && ai !== "zai") {
     return { ok: false, status: 400, error: "AI must be 'gemini' or 'zai'" };
+  }
+
+  // P8-C2: optional; runMultilingualPreStage defaults an omitted value to
+  // "natural" and ignores it entirely for Japanese input. This is the ONLY
+  // validation point — no other layer re-checks the literal values.
+  const translationStyle = (body as any)?.translationStyle;
+  if (translationStyle !== undefined && !isValidTranslationStyle(translationStyle)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `translationStyle must be one of: ${TRANSLATION_STYLES.join(", ")}`,
+    };
   }
 
   return { ok: true, status: 200 };

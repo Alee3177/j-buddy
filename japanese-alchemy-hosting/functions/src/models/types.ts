@@ -1,3 +1,5 @@
+import { TranslationStyle } from "./translationStyle";
+
 // Response types
 export interface SuccessResponse {
   success: boolean;
@@ -35,6 +37,10 @@ export interface ExplainRequest {
   context_before?: string;
   context_after?: string;
   ai?: AiProvider;
+  // P8-C2: only affects zh/en source text that goes through the
+  // multilingual pre-stage translation; optional, defaults to "natural";
+  // ignored server-side for Japanese input even if present.
+  translationStyle?: TranslationStyle;
 }
 
 export interface SaveItemsRequest {

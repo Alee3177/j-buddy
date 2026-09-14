@@ -35,6 +35,7 @@ describe("shared multilingual pre-stage usage", () => {
       originalContent: "テストです",
       analysisContent: "テストです",
       translated: false,
+      translationStyle: "natural",
     });
     mockChatCompletion.mockReset();
     mockChatCompletion.mockResolvedValue({ response: { success: true, data: "x" } });
@@ -44,7 +45,7 @@ describe("shared multilingual pre-stage usage", () => {
 
   it("explainHandler funnels content through the shared pre-stage helper", async () => {
     await explainHandler({ data: { content: "テストです" } } as any);
-    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith("テストです", expect.anything());
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
   });
 
   it("explainStreamCallableHandler funnels content through the same shared pre-stage helper", async () => {
@@ -53,6 +54,31 @@ describe("shared multilingual pre-stage usage", () => {
       acceptsStreaming: false,
       rawRequest: { ip: "127.0.0.1" },
     } as any);
-    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith("テストです", expect.anything());
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
+  });
+
+  // P8-C2: item 8 — the shared pre-stage helper actually receives the
+  // caller-supplied translationStyle, through BOTH surfaces, via the same
+  // (single) call site shape — not two independently-wired copies.
+  it("P8-C2: explainHandler forwards translationStyle to the shared pre-stage helper", async () => {
+    await explainHandler({ data: { content: "テストです", translationStyle: "business" } } as any);
+    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith(
+      "テストです",
+      expect.anything(),
+      "business"
+    );
+  });
+
+  it("P8-C2: explainStreamCallableHandler forwards translationStyle to the shared pre-stage helper", async () => {
+    await explainStreamCallableHandler({
+      data: { content: "テストです", translationStyle: "news" },
+      acceptsStreaming: false,
+      rawRequest: { ip: "127.0.0.1" },
+    } as any);
+    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith(
+      "テストです",
+      expect.anything(),
+      "news"
+    );
   });
 });

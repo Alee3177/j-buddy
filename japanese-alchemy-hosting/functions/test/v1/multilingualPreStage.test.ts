@@ -5,7 +5,7 @@ import {
   TranslationFailedError,
   MAX_TRANSLATED_CONTENT_LENGTH,
 } from "../../src/v1/multilingualPreStage";
-import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
+import { buildTranslationSystemPrompt } from "../../src/models/translationPrompt";
 import { LlmService } from "../../src/services/llmService";
 
 function fakeLlmService(chatCompletion: jest.Mock): LlmService {
@@ -25,22 +25,42 @@ describe("runMultilingualPreStage", () => {
       originalContent: "これはテストです",
       analysisContent: "これはテストです",
       translated: false,
+      translationStyle: "natural",
     });
     expect(chatCompletion).not.toHaveBeenCalled();
   });
 
-  it("translates Chinese input using the translation system prompt", async () => {
+  it("P8-C2: Japanese input ignores an explicit non-default style — still no LLM call, style just reported back", async () => {
+    const chatCompletion = jest.fn();
+    const result = await runMultilingualPreStage(
+      "これはテストです",
+      fakeLlmService(chatCompletion),
+      "business"
+    );
+
+    expect(result).toEqual({
+      detectedLanguage: "ja",
+      originalContent: "これはテストです",
+      analysisContent: "これはテストです",
+      translated: false,
+      translationStyle: "business",
+    });
+    expect(chatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("translates Chinese input using the default (natural) translation prompt when no style is given", async () => {
     const chatCompletion = jest.fn() as any;
     chatCompletion.mockResolvedValue({ response: { success: true, data: "これはテストです" } });
 
     const result = await runMultilingualPreStage("这是一个测试", fakeLlmService(chatCompletion));
 
-    expect(chatCompletion).toHaveBeenCalledWith(TRANSLATION_SYSTEM_PROMPT, "这是一个测试");
+    expect(chatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt("natural"), "这是一个测试");
     expect(result).toEqual({
       detectedLanguage: "zh",
       originalContent: "这是一个测试",
       analysisContent: "これはテストです",
       translated: true,
+      translationStyle: "natural",
     });
   });
 
@@ -54,6 +74,33 @@ describe("runMultilingualPreStage", () => {
     expect(result.translated).toBe(true);
     expect(result.analysisContent).toBe("こんにちは");
     expect(result.originalContent).toBe("Hello there");
+    expect(result.translationStyle).toBe("natural");
+  });
+
+  describe("P8-C2 translation style routing", () => {
+    it.each(["natural", "news", "business"] as const)(
+      "%s: passes the matching style-specific prompt to the LLM and reports it back",
+      async (style) => {
+        const chatCompletion = jest.fn() as any;
+        chatCompletion.mockResolvedValue({ response: { success: true, data: "翻訳結果" } });
+
+        const result = await runMultilingualPreStage("这是一个测试", fakeLlmService(chatCompletion), style);
+
+        expect(chatCompletion).toHaveBeenCalledWith(buildTranslationSystemPrompt(style), "这是一个测试");
+        expect(result.translationStyle).toBe(style);
+        expect(result.translated).toBe(true);
+      }
+    );
+
+    it("uses distinct prompts per style (no accidental sharing)", async () => {
+      const natural = buildTranslationSystemPrompt("natural");
+      const news = buildTranslationSystemPrompt("news");
+      const business = buildTranslationSystemPrompt("business");
+
+      expect(natural).not.toBe(news);
+      expect(natural).not.toBe(business);
+      expect(news).not.toBe(business);
+    });
   });
 
   it("preserves originalContent exactly regardless of translation", async () => {

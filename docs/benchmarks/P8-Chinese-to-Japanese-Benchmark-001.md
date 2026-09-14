@@ -91,3 +91,80 @@ not:
 - deploy anything.
 
 P7 is unaffected by this record.
+
+## P8-C2 addendum — translation style variants (2026-09-15)
+
+P8-C2 added an explicit `translationStyle` control (`natural` | `news` |
+`business`, default `natural`) applied to the multilingual pre-stage
+translation step ahead of the (still unmodified) Japanese Analyzer. These
+examples extend this same benchmark's source text to the `natural` and
+`business` styles, plus a short news-register and an English source, per the
+P8-C2 acceptance criteria — none of these are exact-string requirements, only
+illustrative targets for judging translation naturalness/register in
+implementation/eval work.
+
+### 1. natural (same source as above)
+
+Illustrative target (natural, general-reading register):
+
+```
+米国Prismacolor Premier（プリズマカラー・プレミア）の
+油性色鉛筆（単色・1本売り）
+#103～#997 単色から選択可能
+```
+
+Acceptance: natural Japanese, faithful to the source, usable as an ordinary
+product description.
+
+### 2. business (same source as above)
+
+Illustrative target (polished EC/product-copy register, factual content
+unchanged):
+
+```
+米国Prismacolor Premier（プリズマカラー・プレミア）
+油性色鉛筆・単色売り
+#103～#997 各色よりお選びいただけます
+```
+
+Acceptance: natural Japanese EC/product-copy register, polished but
+factual — product/model/color-number information (Prismacolor Premier,
+#103–#997, 油性/single-color) preserved exactly; no invented marketing
+claims (no certifications, awards, or performance claims not present in the
+source).
+
+### 3. news (new short Chinese-adjacent source for this style)
+
+Source (already Japanese in this particular example — included to give the
+news register a concrete before/after even without a translation step; the
+`news` style prompt is exercised identically regardless of source language):
+
+```
+高市首相は大詰めの調整を行っています。最新情報を伝えてもらいます。
+```
+
+Acceptance: concise, factual, objective Japanese news/reporting register —
+avoids chatty phrasing and promotional exaggeration; names, dates, numbers,
+and claims preserved. Not a fixed single accepted sentence.
+
+### 4. English source (en + business / en + news routing)
+
+Source:
+
+```
+The Prismacolor Premier oil-based color pencil is now available in single
+units, colors #103 through #997.
+```
+
+Acceptance (business): polished, natural Japanese product-copy register;
+model name, color-number range, and "oil-based / single-unit" facts
+preserved exactly; no invented claims.
+
+Acceptance (news): concise, factual Japanese reporting register conveying
+the same facts, without marketing phrasing.
+
+These four cases are covered by automated tests (mocked LLM) in
+`japanese-alchemy-hosting/functions/test/v1/explainCallable.test.ts` and
+`explainStreamCallableHandler.test.ts` (`P8-C2 translation style control`
+describe blocks) — they assert routing/prompt-selection correctness, not the
+LLM's actual output text.

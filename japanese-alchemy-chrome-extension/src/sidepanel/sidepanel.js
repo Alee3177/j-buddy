@@ -6,6 +6,13 @@ import {
     getPromptVariant,
     setPromptVariant,
 } from '../scripts/promptVariant.js';
+import {
+    DEFAULT_TRANSLATION_STYLE,
+    getTranslatedSectionLabel,
+    getTranslationStyle,
+    isValidTranslationStyle,
+    setTranslationStyle,
+} from '../scripts/translationStyle.js';
 import { buildContextCacheKey } from '../scripts/surroundingContext.js';
 import { enrichMarkdownWithConjugation } from '../scripts/conjugation.js';
 import { repairRuby, separateReadingContract, reconcileRuby } from '../scripts/rubyContract.js';
@@ -185,9 +192,13 @@ function prependNaturalJapaneseSections(html, preStage) {
     // would just be stripped back out.
     const original = escapeForNaturalJapaneseDisplay(preStage.originalContent);
     const natural = escapeForNaturalJapaneseDisplay(preStage.analysisContent);
+    // P8-C2: label reflects the style actually used for this translation
+    // (自然日文/新聞日文/商務日文) — falls back to the natural label if
+    // preStage carries no/unknown style (e.g. an older cached projection).
+    const sectionLabel = getTranslatedSectionLabel(preStage.translationStyle);
     const sections =
         `<h3>原文</h3><p>${original}</p>` +
-        `<h3>自然日文</h3><p>${natural}</p>`;
+        `<h3>${sectionLabel}</h3><p>${natural}</p>`;
     return `${sections}${html}`;
 }
 
@@ -694,8 +705,13 @@ export async function analizingSelectedText(selectedText, context = { before: ''
     const proseElement = resultElement.querySelector('.prose');
     const loadingElement = document.getElementById('loading');
     let promptVariant;
+    let translationStyle;
     try {
         promptVariant = options.promptVariant || await getPromptVariant();
+        // P8-C2: resolved the same way as promptVariant — applies to the
+        // NEXT analysis request (the selector never re-triggers analysis
+        // itself, mirroring the analysis-mode toggle).
+        translationStyle = options.translationStyle || await getTranslationStyle();
         if (!isLatestAnalysis(requestId)) return;
     } catch (error) {
         if (isLatestAnalysis(requestId)) {
@@ -721,6 +737,11 @@ export async function analizingSelectedText(selectedText, context = { before: ''
             context: contextForRequest,
             promptVariant,
             sourceIdentity,
+            // Only fold a non-default style into the key: this keeps the
+            // (overwhelmingly common) natural-style key byte-identical to
+            // pre-P8-C2 output, and only fragments the cache when the user
+            // actually picked news/business.
+            translationStyle: translationStyle === DEFAULT_TRANSLATION_STYLE ? undefined : translationStyle,
         })
         : '';
 
@@ -977,6 +998,9 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                     },
                     {
                         signal: analysisController.signal,
+                        // P8-C2: only affects zh/en translation server-side;
+                        // resolved above the same way as promptVariant.
+                        translationStyle,
                         // P8-B: one-shot status the callable sends before translating
                         // non-Japanese source text — never fires on the Japanese
                         // fast path. The first real analysis chunk's onChunk above
@@ -1312,6 +1336,29 @@ export async function handleAnalysisModeChange(elements, variant) {
     }
 }
 
+// P8-C2: translation-style selector — mirrors the analysis-mode functions
+// above, but the control is a single <select> rather than a button group, so
+// there is only one element to keep in sync (no per-option "selected" toggle).
+export function updateTranslationStyleUi(elements, style) {
+    if (elements?.translationStyleSelect) {
+        elements.translationStyleSelect.value = style;
+    }
+}
+
+export async function initializeTranslationStyle(elements) {
+    const style = await getTranslationStyle();
+    updateTranslationStyleUi(elements, style);
+}
+
+export async function handleTranslationStyleChange(elements, style) {
+    if (!isValidTranslationStyle(style)) return;
+    await setTranslationStyle(style);
+    // No re-analysis here: P8-C2 applies the selection to the NEXT analysis
+    // request, matching the analysis-mode toggle's behavior of not
+    // re-running the current result on a mode switch.
+    updateTranslationStyleUi(elements, style);
+}
+
 export function setSidepanelElementsForTesting(testElements) {
     elements = testElements;
 }
@@ -1340,6 +1387,7 @@ async function initElements() {
     shareCheckbox: document.getElementById('shareCheckbox'),
     shareCheckboxContainer: document.getElementById('shareCheckboxContainer'),
     analysisModeButtons: document.querySelectorAll('.analysis-mode-option'),
+    translationStyleSelect: document.getElementById('translationStyleSelect'),
     result: document.getElementById('result'),
     // Auth elements
     authSection: document.querySelector('#authSection'),
@@ -1355,6 +1403,7 @@ async function initElements() {
   // Initialize font size
   await initializeFontSize(elements);
   await initializeAnalysisMode(elements);
+  await initializeTranslationStyle(elements);
   setCompletedAnalysisAvailable(false);
 
   return elements;
@@ -1495,6 +1544,9 @@ export async function setupEventListeners() {
       button.addEventListener('click', async () => {
         await handleAnalysisModeChange(elements, button.dataset.promptVariant);
       });
+    });
+    elements.translationStyleSelect?.addEventListener('change', async (event) => {
+      await handleTranslationStyleChange(elements, event.target.value);
     });
     elements.cancelAnalysisButton?.addEventListener('click', () => {
       handleCancelAnalysis(elements);
