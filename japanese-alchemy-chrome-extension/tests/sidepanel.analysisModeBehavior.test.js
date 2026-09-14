@@ -810,6 +810,143 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
   });
 });
 
+// P8 follow-up: recoverable ruby-contract / reading-reconciliation diagnostics
+// must never populate chrome://extensions' red "Errors" indicator, which is
+// driven by console.error (and uncaught exceptions) — never console.warn. The
+// three sites above (invalid reading contract, reconciliation skipped,
+// unresolved ruby issues) already log via console.warn; these tests lock that
+// in explicitly (spying on BOTH warn and error) so a future change can't
+// silently regress one of them back to console.error, and confirm a genuine
+// fatal failure elsewhere in the same pipeline still uses console.error.
+describe('P8 ruby diagnostic logging cleanup', () => {
+  const readingFence = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
+
+  beforeEach(() => {
+    jest.useRealTimers();
+    setupElements();
+    setupStorage({ promptVariant: 'v2' });
+    setupLocalStorage();
+    setupDeferredApi();
+  });
+
+  test('1/2: RECONCILE_SELECTED_TEXT_MISMATCH and RECONCILE_SOURCE_TEXT_MISMATCH use console.warn, never console.error', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      const { result, saveForLaterBtn } = setupElements();
+      // Model fabricates "25" consistently in both ### 原句 and the contract;
+      // the user actually selected "24" — grounding + surface both mismatch.
+      const human = '### 原句\n  - {台風|たいふう}25{号|ごう}{発生|はっせい}\n\n### 文法分析\n（無）';
+      const contract = {
+        reading_contract_version: 1,
+        source_text: '台風25号発生',
+        tokens: [
+          { text: '台風', reading: 'たいふう' },
+          { text: '25', reading: null },
+          { text: '号', reading: 'ごう' },
+          { text: '発生', reading: 'はっせい' },
+        ],
+      };
+
+      const request = analizingSelectedText('台風24号発生', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone(`${human}\n\n${readingFence(contract)}`);
+      apiCalls[0].resolve();
+      await request;
+
+      // Recoverable: the analysis still completes.
+      expect(result.classList.contains('show')).toBe(true);
+      expect(saveForLaterBtn.disabled).toBe(false);
+
+      const reconcileWarns = warnSpy.mock.calls
+        .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
+      expect(reconcileWarns).toHaveLength(1);
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
+      expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('3: KANA_ONLY_BASE uses console.warn, never console.error', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      const { result } = setupElements();
+      // "ありがとう" is entirely kana (no Han) — a ruby base over it is
+      // KANA_ONLY_BASE, which repairRuby reports but never auto-repairs.
+      const request = analizingSelectedText('ありがとうございます', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('{ありがとう|アリガトウ}ございます');
+      apiCalls[0].resolve();
+      await request;
+
+      // Recoverable: the analysis still completes.
+      expect(result.classList.contains('show')).toBe(true);
+
+      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      expect(rubyWarns).toHaveLength(1);
+      expect(rubyWarns[0][0]).toContain('KANA_ONLY_BASE');
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('4: a genuine fatal setup failure (analysis cannot start) still uses console.error', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { alertMessage, result } = setupElements();
+      // No promptVariant supplied in options, so analizingSelectedText falls
+      // back to getPromptVariant() -> chrome.storage.local.get(), forced here
+      // to reject — a true failure: setup cannot complete, so no analysis
+      // request is ever made at all.
+      global.chrome.storage.local.get = jest.fn(async () => {
+        throw new Error('storage unavailable');
+      });
+
+      await analizingSelectedText('台風が接近する', {}, {});
+
+      expect(result.classList.contains('show')).toBe(false);
+      expect(alertMessage.classList.contains('show')).toBe(true);
+      const setupErrors = errorSpy.mock.calls.filter((c) => String(c[0]).includes('Analysis setup error'));
+      expect(setupErrors).toHaveLength(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test('5: a normal (issue-free) analysis result is unchanged and logs neither a ruby warning nor any error', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const apiCalls = setupDeferredApi();
+      const { prose, result } = setupElements();
+
+      const request = analizingSelectedText('台風が接近する', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+      apiCalls[0].onDone('{台風|たいふう}が{接近|せっきん}する');
+      apiCalls[0].resolve();
+      await request;
+
+      expect(result.classList.contains('show')).toBe(true);
+      expect(prose.innerHTML).toContain('<rb>台風</rb>');
+      expect(global.localStorage.getItem('lastResponse')).toBe('{台風|たいふう}が{接近|せっきん}する');
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('reading reconciliation skipped'))).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+});
+
 describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract separation', () => {
   const readingFence = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
   const validContract = {
