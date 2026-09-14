@@ -738,7 +738,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
   });
 
   test('C/D: ambiguous malformed ruby is left byte-for-byte unchanged and does not block completion', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       const { result, saveForLaterBtn, copyButton } = setupElements();
@@ -759,18 +759,18 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
       expect(copyButton.disabled).toBe(false);
 
       // exactly one aggregated developer warning, issue codes only, no secrets
-      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      const rubyWarns = debugSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
       expect(rubyWarns).toHaveLength(1);
       expect(rubyWarns[0][0]).toContain('MISSING_OPEN_BRACE');
       expect(rubyWarns[0][0]).toContain('UNBALANCED_BRACE');
       expect(rubyWarns[0][0]).not.toMatch(/apiKey|Bearer|Authorization/i);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('D: a semantic reading warning (3{日|にち}) is reported but the reading is never rewritten', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -782,16 +782,16 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
       await request;
 
       expect(global.localStorage.getItem('lastResponse')).toBe('3{日|にち}{以降|いこう}');
-      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      const rubyWarns = debugSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
       expect(rubyWarns).toHaveLength(1);
       expect(rubyWarns[0][0]).toContain('SUSPECT_COUNTER_READING');
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('E: valid completed output is unchanged and logs no ruby-contract warning', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -803,21 +803,25 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 1B ruby-contract final
       await request;
 
       expect(global.localStorage.getItem('lastResponse')).toBe('{台風|たいふう}が{接近|せっきん}する');
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 });
 
-// P8 follow-up: recoverable ruby-contract / reading-reconciliation diagnostics
-// must never populate chrome://extensions' red "Errors" indicator, which is
-// driven by console.error (and uncaught exceptions) — never console.warn. The
-// three sites above (invalid reading contract, reconciliation skipped,
-// unresolved ruby issues) already log via console.warn; these tests lock that
-// in explicitly (spying on BOTH warn and error) so a future change can't
-// silently regress one of them back to console.error, and confirm a genuine
-// fatal failure elsewhere in the same pipeline still uses console.error.
+// P8 follow-up: live testing proved chrome://extensions' red "錯誤" (Errors)
+// indicator is populated by console.warn too, not only console.error, in
+// this unpacked-extension environment — so recoverable ruby-contract /
+// reading-reconciliation diagnostics were moved from console.warn to
+// console.debug (still visible in DevTools, e.g. Console's "Verbose"
+// filter, but does not surface as an extension error). The three sites
+// above (invalid reading contract, reconciliation skipped, unresolved ruby
+// issues) now log via console.debug; these tests lock that in explicitly —
+// spying on console.debug, console.warn, AND console.error together — so a
+// future change can't silently regress one of them back to warn or error,
+// and confirm a genuine fatal failure elsewhere in the same pipeline still
+// uses console.error.
 describe('P8 ruby diagnostic logging cleanup', () => {
   const readingFence = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
 
@@ -829,7 +833,8 @@ describe('P8 ruby diagnostic logging cleanup', () => {
     setupDeferredApi();
   });
 
-  test('1/2: RECONCILE_SELECTED_TEXT_MISMATCH and RECONCILE_SOURCE_TEXT_MISMATCH use console.warn, never console.error', async () => {
+  test('1/2: RECONCILE_SELECTED_TEXT_MISMATCH and RECONCILE_SOURCE_TEXT_MISMATCH use console.debug, never warn/error', async () => {
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -859,19 +864,22 @@ describe('P8 ruby diagnostic logging cleanup', () => {
       expect(result.classList.contains('show')).toBe(true);
       expect(saveForLaterBtn.disabled).toBe(false);
 
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileDebugs = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
-      expect(reconcileWarns).toHaveLength(1);
-      expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
-      expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
+      expect(reconcileDebugs).toHaveLength(1);
+      expect(reconcileDebugs[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
+      expect(reconcileDebugs[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
+      expect(warnSpy).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
+      debugSpy.mockRestore();
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
   });
 
-  test('3: KANA_ONLY_BASE uses console.warn, never console.error', async () => {
+  test('3: KANA_ONLY_BASE unresolved issue uses console.debug, never warn/error', async () => {
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -888,11 +896,13 @@ describe('P8 ruby diagnostic logging cleanup', () => {
       // Recoverable: the analysis still completes.
       expect(result.classList.contains('show')).toBe(true);
 
-      const rubyWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
-      expect(rubyWarns).toHaveLength(1);
-      expect(rubyWarns[0][0]).toContain('KANA_ONLY_BASE');
+      const rubyDebugs = debugSpy.mock.calls.filter((c) => String(c[0]).includes('[ruby-contract]'));
+      expect(rubyDebugs).toHaveLength(1);
+      expect(rubyDebugs[0][0]).toContain('KANA_ONLY_BASE');
+      expect(warnSpy).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
+      debugSpy.mockRestore();
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
@@ -921,7 +931,8 @@ describe('P8 ruby diagnostic logging cleanup', () => {
     }
   });
 
-  test('5: a normal (issue-free) analysis result is unchanged and logs neither a ruby warning nor any error', async () => {
+  test('5: a normal (issue-free) analysis result is unchanged and logs no ruby diagnostic at any level', async () => {
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -937,10 +948,12 @@ describe('P8 ruby diagnostic logging cleanup', () => {
       expect(result.classList.contains('show')).toBe(true);
       expect(prose.innerHTML).toContain('<rb>台風</rb>');
       expect(global.localStorage.getItem('lastResponse')).toBe('{台風|たいふう}が{接近|せっきん}する');
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('reading reconciliation skipped'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('reading reconciliation skipped'))).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
+      debugSpy.mockRestore();
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     }
@@ -1054,7 +1067,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
   });
 
   test('D: an invalid final reading contract is NOT stripped; analysis completes with one contract warning', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       const { result, saveForLaterBtn } = setupElements();
@@ -1079,18 +1092,18 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
       // the invalid block was left in place (never delete unproven content)
       expect(global.localStorage.getItem('lastResponse')).toContain('reading_contract_version');
       // exactly one aggregated "invalid reading contract" warning, codes only
-      const contractWarns = warnSpy.mock.calls
+      const contractWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('invalid reading contract'));
       expect(contractWarns).toHaveLength(1);
       expect(contractWarns[0][0]).toContain('READING_CONTRACT_SOURCE_MISMATCH');
       expect(contractWarns[0][0]).not.toMatch(/雨|降|振|source_text|apiKey|Bearer|Authorization/);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('E: a V1-style response with no reading contract behaves exactly as before, no warning', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1102,9 +1115,9 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-1 reading-contract 
       await request;
 
       expect(global.localStorage.getItem('lastResponse')).toBe('### 原句\n  - {台風|たいふう}が{接近|せっきん}する');
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('reading contract'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('reading contract'))).toBe(false);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
@@ -1341,7 +1354,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
   });
 
   test('HALLUCINATION GUARD: contract self-consistent with ### 原句 but not the selected text → ground truth (plain, no ruby) overwrites it, grounding warning still fires (P2-A)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       const { result, saveForLaterBtn } = setupElements();
@@ -1379,7 +1392,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       // contract still stripped (2B-1)
       expect(response).not.toContain('reading_contract_version');
 
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
@@ -1387,7 +1400,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       // no selected or model text in the warning
       expect(reconcileWarns[0][0]).not.toMatch(/台風|24|25|発生|source_text|apiKey|Bearer|Authorization/);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
@@ -1436,7 +1449,7 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
   });
 
   test('F: a response with no reading contract still gets its ### 原句 line corrected against ground truth (P2-A)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1454,17 +1467,17 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       const response = global.localStorage.getItem('lastResponse');
       expect(response).toContain('  - 3日以降の天気');
       expect(response).not.toContain('にち');
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test("F2: legacy/personal-provider compatibility — no contract + a ### 原句 line that's already ground-truth-correct is left byte-for-byte untouched", async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1477,14 +1490,14 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       await request;
 
       expect(global.localStorage.getItem('lastResponse')).toBe(human);
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('G: grounded contract but the ### 原句 visible surface differs → the grounded contract reconstruction overwrites it, one RECONCILE_SOURCE_TEXT_MISMATCH warning (P2-A)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       const { result, saveForLaterBtn } = setupElements();
@@ -1515,13 +1528,13 @@ describe('sidepanel analysis-mode behavior — v0.2 Phase 2B-2 authoritative rub
       expect(response).not.toContain('沖縄');
       expect(response).not.toContain('reading_contract_version'); // still stripped (valid contract)
 
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
       expect(reconcileWarns[0][0]).not.toMatch(/台風|接近|沖縄|source_text|apiKey|Bearer|Authorization/);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
@@ -1623,7 +1636,7 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
   });
 
   test('B: a valid contract whose source_text is not the selected text persists no reading', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1650,17 +1663,17 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       expect('reading' in projection.json).toBe(false);
 
       // existing reconciliation warning behavior unchanged
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SELECTED_TEXT_MISMATCH');
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('C: an invalid final contract persists no reading and is still left in place', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1682,16 +1695,16 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       expect('reading' in projection.json).toBe(false);
       // existing invalid-block behavior unchanged: not stripped, one contract warning
       expect(global.localStorage.getItem('lastResponse')).toContain('reading_contract_version');
-      const contractWarns = warnSpy.mock.calls
+      const contractWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('invalid reading contract'));
       expect(contractWarns).toHaveLength(1);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('D: a response with no reading contract persists no reading (V1 behavior unchanged)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const apiCalls = setupDeferredApi();
       setupElements();
@@ -1706,14 +1719,14 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       expect(global.localStorage.getItem('lastResponse')).toBe(human);
       const projection = JSON.parse(global.localStorage.getItem('lastAnalysisResult'));
       expect('reading' in projection.json).toBe(false);
-      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
+      expect(debugSpy.mock.calls.some((c) => String(c[0]).includes('[ruby-contract]'))).toBe(false);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 
   test('E: a selection-grounded contract still persists reading when the ### 原句 line differs (and the grounded contract now also fixes the visible line, P2-A)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     try {
       const { calls, saved } = deferredSaveApi();
       setupElements();
@@ -1732,7 +1745,7 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       // source line rebuilt from the grounded contract (P2-A)
       expect(response).toContain('  - {台風|たいふう}が{接近|せっきん}する');
       expect(response).not.toContain('沖縄');
-      const reconcileWarns = warnSpy.mock.calls
+      const reconcileWarns = debugSpy.mock.calls
         .filter((c) => String(c[0]).includes('reading reconciliation skipped'));
       expect(reconcileWarns).toHaveLength(1);
       expect(reconcileWarns[0][0]).toContain('RECONCILE_SOURCE_TEXT_MISMATCH');
@@ -1743,7 +1756,7 @@ describe('sidepanel analysis-mode behavior — v0.3 Phase 1 persisted authoritat
       await handleSaveForLater();
       expect(saved[0].page.structured_json.reading).toEqual(groundedReading);
     } finally {
-      warnSpy.mockRestore();
+      debugSpy.mockRestore();
     }
   });
 

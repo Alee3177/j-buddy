@@ -807,7 +807,15 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             const contractSummary = Object.entries(contractCounts)
                                 .map(([code, count]) => `${code}×${count}`)
                                 .join(', ');
-                            console.warn(`[ruby-contract] invalid reading contract: ${contractSummary}`);
+                            // P8: console.debug, not console.warn/error — this is a
+                            // recoverable quality diagnostic (analysis still
+                            // completes; only the machine-readable reading contract
+                            // is discarded). console.warn was found, via live
+                            // testing, to still populate chrome://extensions' red
+                            // "錯誤" (Errors) indicator in this unpacked-extension
+                            // environment — console.debug does not, while remaining
+                            // visible in DevTools (Console filter: "Verbose").
+                            console.debug(`[ruby-contract] invalid reading contract: ${contractSummary}`);
                         }
                         const humanMarkdown = separated.markdown;
                         // v0.2 Phase 2B-2 / P2-A: when a valid reading contract is
@@ -857,7 +865,11 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             const reconcileSummary = Object.entries(reconcileCounts)
                                 .map(([code, count]) => `${code}×${count}`)
                                 .join(', ');
-                            console.warn(`[ruby-contract] reading reconciliation skipped: ${reconcileSummary}`);
+                            // P8: console.debug — recoverable (falls back to plain
+                            // ground-truth text, analysis still completes). See the
+                            // console.debug rationale above separateReadingContract's
+                            // contractIssues logging.
+                            console.debug(`[ruby-contract] reading reconciliation skipped: ${reconcileSummary}`);
                         }
                         // v0.2 Phase 1B: normalize the (reconciled) human-readable
                         // Markdown with the deterministic ruby contract before any
@@ -879,7 +891,11 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                             const summary = Object.entries(issueCounts)
                                 .map(([code, count]) => `${code}×${count}`)
                                 .join(', ');
-                            console.warn(
+                            // P8: console.debug — recoverable (e.g. KANA_ONLY_BASE,
+                            // SUSPECT_COUNTER_READING); rendering still succeeds with
+                            // the ruby left as-is. See the console.debug rationale
+                            // above separateReadingContract's contractIssues logging.
+                            console.debug(
                                 `[ruby-contract] ${rubyRepair.remainingIssues.length} unresolved ruby `
                                 + `issue(s) after ${rubyRepair.repairs.length} safe repair(s): ${summary}`
                             );
