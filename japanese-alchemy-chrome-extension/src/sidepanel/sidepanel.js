@@ -1066,10 +1066,14 @@ async function handleSaveForLater() {
 
         const result = await jaAlchemyApiService.saveAnalysis(analysis, userId);
 
-        // Show success message
-        const message = isShared
-            ? `已成功儲存分析頁面至共享收藏！`
-            : `已成功儲存分析頁面！`;
+        // Show success message. P7.4: a repeated identical shared save is
+        // deduplicated server-side and reported as alreadyExists — a clean,
+        // friendly notice, not an error.
+        const message = result.alreadyExists
+            ? '此分析已存在於共享收藏中，未重複新增。'
+            : isShared
+                ? `已成功儲存分析頁面至共享收藏！`
+                : `已成功儲存分析頁面！`;
         alertMessage(elements.alertMessage, message, 'info');
         elements.alertMessage.classList.add('show');
         // Scroll to top to see the message

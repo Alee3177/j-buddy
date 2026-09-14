@@ -58,6 +58,12 @@ export interface SaveItemsRequest {
 export interface SaveItemsResponse {
   success: boolean;
   message: string;
+  // Japanese Reader P7.4: true only for a shared save whose content
+  // (fingerprinted from the normalized source text) already existed in
+  // shared_analysis_pages — nothing new was written. Additive field, always
+  // present for shared saves, omitted for personal saves where it does not
+  // apply; pre-P7.4 clients ignore it.
+  alreadyExists?: boolean;
   saved: {
     words_count: number;
     grammars_count: number;

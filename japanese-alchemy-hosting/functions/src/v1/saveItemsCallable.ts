@@ -92,23 +92,81 @@ export async function saveItemsHandler(request: any): Promise<SaveItemsResponse>
   try {
     const firestoreService = new FirestoreService();
 
-    // Personal writes target the authenticated uid; shared writes pass null so
-    // the service routes them to the shared_* root collections.
-    const writeUserId = isShared ? null : personalUserId;
+    if (isShared) {
+      // P7.4 — shared-collection deduplication. The page save (if any) is
+      // attempted FIRST so its dedup result is known before touching
+      // shared_vocabularies/shared_grammars: when the page already exists
+      // (same normalized source text), the vocab/grammar for THIS save are
+      // skipped too, rather than left as duplicates "orphaned" from a page
+      // that was never (re)created. A save with no page at all has no
+      // source-text identity to dedupe against and keeps its original
+      // (non-deduplicated) behavior.
+      let pageSaved = false;
+      let alreadyExists = false;
+      if (page) {
+        const pageResult = await firestoreService.saveAnalysisPage(
+          null,
+          page,
+          true,
+          metadata
+        );
+        pageSaved = pageResult.saved;
+        alreadyExists = pageResult.alreadyExists;
+      }
 
-    // Save vocabulary items
+      let wordsSaved = 0;
+      let grammarsSaved = 0;
+      if (!alreadyExists) {
+        wordsSaved = await firestoreService.saveVocabulary(
+          null,
+          words,
+          true,
+          metadata
+        );
+        grammarsSaved = await firestoreService.saveGrammar(
+          null,
+          grammars,
+          true,
+          metadata
+        );
+      }
+
+      const response: SaveItemsResponse = {
+        success: true,
+        message: alreadyExists
+          ? "This analysis already exists in the shared collection"
+          : "Items saved to shared collection",
+        alreadyExists,
+        saved: {
+          words_count: wordsSaved,
+          grammars_count: grammarsSaved,
+          page_saved: pageSaved,
+          learning_items_count: 0,
+        },
+      };
+
+      logger.info(`Successfully processed shared save`, {
+        already_exists: alreadyExists,
+        words_saved: wordsSaved,
+        grammars_saved: grammarsSaved,
+        page_saved: pageSaved,
+      });
+
+      return response;
+    }
+
+    // Personal path — unchanged (not deduplicated in this phase).
     const wordsSaved = await firestoreService.saveVocabulary(
-      writeUserId,
+      personalUserId,
       words,
-      isShared,
+      false,
       metadata
     );
 
-    // Save grammar items
     const grammarsSaved = await firestoreService.saveGrammar(
-      writeUserId,
+      personalUserId,
       grammars,
-      isShared,
+      false,
       metadata
     );
 
@@ -116,45 +174,34 @@ export async function saveItemsHandler(request: any): Promise<SaveItemsResponse>
     let learningItemsCount = 0;
 
     if (page) {
-      if (isShared) {
-        pageSaved = await firestoreService.saveAnalysisPage(
-          null,
-          page,
-          true,
-          metadata
-        );
-      } else {
-        // Personal path: page + derived learning items in one atomic batch.
-        // One save = exactly one analysis_pages document. Learning items are
-        // derived from the already-parsed structured_json (no markdown
-        // reparse, no LLM call) and every item's sourceAnalysisId is the id of
-        // the page written in the same batch.
-        const now = Date.now();
-        const result = await firestoreService.savePersonalAnalysisPage(
-          personalUserId as string,
-          page,
-          metadata,
-          (sourceAnalysisId) =>
-            deriveLearningItems(
-              page.structured_json ?? null,
-              {
-                sourceText: metadata.source_text ?? "",
-                sourceUrl: metadata.source_url ?? null,
-              },
-              sourceAnalysisId,
-              { userId: personalUserId as string, now }
-            )
-        );
-        pageSaved = result.pageId != null;
-        learningItemsCount = result.learningItemsCount;
-      }
+      // Personal path: page + derived learning items in one atomic batch.
+      // One save = exactly one analysis_pages document. Learning items are
+      // derived from the already-parsed structured_json (no markdown
+      // reparse, no LLM call) and every item's sourceAnalysisId is the id of
+      // the page written in the same batch.
+      const now = Date.now();
+      const result = await firestoreService.savePersonalAnalysisPage(
+        personalUserId as string,
+        page,
+        metadata,
+        (sourceAnalysisId) =>
+          deriveLearningItems(
+            page.structured_json ?? null,
+            {
+              sourceText: metadata.source_text ?? "",
+              sourceUrl: metadata.source_url ?? null,
+            },
+            sourceAnalysisId,
+            { userId: personalUserId as string, now }
+          )
+      );
+      pageSaved = result.pageId != null;
+      learningItemsCount = result.learningItemsCount;
     }
 
     const response: SaveItemsResponse = {
       success: true,
-      message: isShared
-        ? "Items saved to shared collection"
-        : "Items saved successfully",
+      message: "Items saved successfully",
       saved: {
         words_count: wordsSaved,
         grammars_count: grammarsSaved,
@@ -164,8 +211,8 @@ export async function saveItemsHandler(request: any): Promise<SaveItemsResponse>
     };
 
     logger.info(`Successfully saved items`, {
-      userId: personalUserId || 'shared',
-      is_shared: isShared,
+      userId: personalUserId,
+      is_shared: false,
       words_saved: wordsSaved,
       grammars_saved: grammarsSaved,
       learning_items_saved: learningItemsCount,

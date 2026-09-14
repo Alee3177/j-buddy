@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import { FirestoreService } from "../../src/services/firestoreService";
+import { sharedPageContentHash } from "../../src/utils/sharedContentFingerprint";
 
 // Mock firebase-admin. `firestore` is a stable jest.fn whose return value is
 // configured in beforeEach so the service's constructor (this.db = admin.firestore())
@@ -229,6 +230,129 @@ describe("FirestoreService", () => {
       expect(add).toHaveBeenCalledWith(expect.objectContaining({
         structured_json: structuredJson,
       }));
+    });
+
+    // P7.4 — shared-collection deduplication. Personal saves are untouched
+    // (still `.add()`, tested above); a shared save with usable source_text
+    // is written under a deterministic content-hash document id via the
+    // atomic `create()` instead.
+    describe("P7.4 shared-page deduplication", () => {
+      function wireDocCreate() {
+        const create = jest.fn() as any;
+        const doc = jest.fn((_id: string) => ({ create }));
+        mockDb.collection.mockReturnValue({ doc });
+        return { create, doc };
+      }
+
+      it("writes a new shared page via create() under its content-hash id", async () => {
+        const { create, doc } = wireDocCreate();
+
+        const result = await service.saveAnalysisPage(
+          null,
+          { rendered_markdown: "# md" },
+          true,
+          { source_text: "美國Prismacolor Premier色鉛筆" }
+        );
+
+        const expectedHash = sharedPageContentHash("美國Prismacolor Premier色鉛筆");
+        expect(mockDb.collection).toHaveBeenCalledWith("shared_analysis_pages");
+        expect(doc).toHaveBeenCalledWith(expectedHash);
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({ source_text: "美國Prismacolor Premier色鉛筆" })
+        );
+        expect(result).toEqual({ saved: true, alreadyExists: false });
+      });
+
+      it("returns alreadyExists:true without throwing when create() rejects ALREADY_EXISTS", async () => {
+        const { create } = wireDocCreate();
+        create.mockImplementation(async () => {
+          throw Object.assign(new Error("6 ALREADY_EXISTS"), { code: 6 });
+        });
+
+        const result = await service.saveAnalysisPage(
+          null,
+          { rendered_markdown: "# md" },
+          true,
+          { source_text: "hello" }
+        );
+
+        expect(result).toEqual({ saved: false, alreadyExists: true });
+      });
+
+      it("propagates a non-ALREADY_EXISTS create() failure", async () => {
+        const { create } = wireDocCreate();
+        create.mockImplementation(async () => {
+          throw new Error("some other Firestore failure");
+        });
+
+        await expect(
+          service.saveAnalysisPage(null, { rendered_markdown: "# md" }, true, {
+            source_text: "hello",
+          })
+        ).rejects.toThrow("some other Firestore failure");
+      });
+
+      it("uses the same content-hash id for whitespace-only differences in source_text", async () => {
+        const { doc } = wireDocCreate();
+
+        await service.saveAnalysisPage(null, { rendered_markdown: "# md" }, true, {
+          source_text: "hello   world",
+        });
+        await service.saveAnalysisPage(null, { rendered_markdown: "# md" }, true, {
+          source_text: "  hello world  ",
+        });
+
+        expect(doc.mock.calls[0][0]).toBe(doc.mock.calls[1][0]);
+      });
+
+      it("uses a different content-hash id for genuinely different source_text", async () => {
+        const { doc } = wireDocCreate();
+
+        await service.saveAnalysisPage(null, { rendered_markdown: "# md" }, true, {
+          source_text: "hello",
+        });
+        await service.saveAnalysisPage(null, { rendered_markdown: "# md" }, true, {
+          source_text: "goodbye",
+        });
+
+        expect(doc.mock.calls[0][0]).not.toBe(doc.mock.calls[1][0]);
+      });
+
+      it("falls back to add() (no dedup) when source_text is absent — never collapses source-text-less saves together", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+
+        const result = await service.saveAnalysisPage(
+          null,
+          { rendered_markdown: "# md" },
+          true,
+          {}
+        );
+
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(result).toEqual({ saved: true, alreadyExists: false });
+      });
+
+      it("does not deduplicate personal (non-shared) page saves", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+
+        await service.saveAnalysisPage(
+          "test-user",
+          { rendered_markdown: "# md" },
+          false,
+          { source_text: "hello" }
+        );
+        await service.saveAnalysisPage(
+          "test-user",
+          { rendered_markdown: "# md" },
+          false,
+          { source_text: "hello" }
+        );
+
+        // Personal path always uses add(); dedup logic is shared-only.
+        expect(add).toHaveBeenCalledTimes(2);
+      });
     });
   });
 

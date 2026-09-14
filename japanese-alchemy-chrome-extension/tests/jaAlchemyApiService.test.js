@@ -214,7 +214,7 @@ describe('JaAlchemyApiService', () => {
       expect(callable).toHaveBeenCalledWith({ userId: 'uid-123', analysis });
     });
 
-    test('maps a successful response into { success, words_count, grammars_count, message }', async () => {
+    test('maps a successful response into { success, words_count, grammars_count, message, alreadyExists }', async () => {
       const callable = jest.fn(async () => ({
         data: { success: true, saved: { words_count: 3, grammars_count: 2 }, message: '已成功儲存分析頁面！' },
       }));
@@ -227,10 +227,11 @@ describe('JaAlchemyApiService', () => {
         words_count: 3,
         grammars_count: 2,
         message: '已成功儲存分析頁面！',
+        alreadyExists: false,
       });
     });
 
-    test('defaults missing saved counts to 0 and supplies a fallback message', async () => {
+    test('defaults missing saved counts to 0, alreadyExists to false, and supplies a fallback message', async () => {
       const callable = jest.fn(async () => ({ data: { success: true } }));
       mockHttpsCallable.mockReturnValue(callable);
 
@@ -241,7 +242,28 @@ describe('JaAlchemyApiService', () => {
         words_count: 0,
         grammars_count: 0,
         message: 'Analysis saved successfully',
+        alreadyExists: false,
       });
+    });
+
+    // P7.4 — shared-collection deduplication: a repeated identical shared
+    // save is reported as a clean alreadyExists:true signal, not an error.
+    test('propagates alreadyExists:true from a deduplicated shared save', async () => {
+      const callable = jest.fn(async () => ({
+        data: {
+          success: true,
+          alreadyExists: true,
+          saved: { words_count: 0, grammars_count: 0, page_saved: false, learning_items_count: 0 },
+          message: 'This analysis already exists in the shared collection',
+        },
+      }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      const sharedAnalysis = { ...baseAnalysis(), is_shared: true };
+      const result = await new JaAlchemyApiService().saveAnalysis(sharedAnalysis, null);
+
+      expect(result.success).toBe(true);
+      expect(result.alreadyExists).toBe(true);
     });
 
     test('shared save sends a null userId regardless of the caller-supplied id', async () => {

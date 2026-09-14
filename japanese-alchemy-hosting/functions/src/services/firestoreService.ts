@@ -7,6 +7,21 @@ import {
   StructuredAnalysis,
 } from "../models/types";
 import { LearningItem, NewLearningItem } from "../models/learningItem";
+import { sharedPageContentHash } from "../utils/sharedContentFingerprint";
+
+/** Firestore's gRPC status for "the document already exists" from `.create()`. */
+const FIRESTORE_ALREADY_EXISTS_CODE = 6;
+
+function isAlreadyExistsError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code === FIRESTORE_ALREADY_EXISTS_CODE || code === "already-exists";
+}
+
+export interface SaveAnalysisPageResult {
+  saved: boolean;
+  /** True when an identical shared page already existed — nothing was written. */
+  alreadyExists: boolean;
+}
 
 export class FirestoreService {
   private db: admin.firestore.Firestore;
@@ -119,14 +134,25 @@ export class FirestoreService {
     })) as GrammarItem[];
   }
 
+  /**
+   * P7.4 — shared saves are deduplicated by content; personal saves are not
+   * (out of scope for this phase — see NewLearningItem/savePersonalAnalysisPage
+   * below, unchanged). For a shared page with usable source text, the
+   * document id IS the content's SHA-256 fingerprint
+   * (`sharedPageContentHash`), written via `create()` — atomic at the
+   * Firestore server, so two concurrent identical saves cannot race past
+   * each other into two documents the way a read-then-write check could.
+   * A page with no usable source text (or any personal-collection save)
+   * falls back to the original random-auto-id `add()` behavior unchanged.
+   */
   async saveAnalysisPage(
     userId: string | null,
     page: { rendered_markdown: string; structured_json?: StructuredAnalysis },
     isShared: boolean = false,
     metadata: any = {}
-  ): Promise<boolean> {
+  ): Promise<SaveAnalysisPageResult> {
     if (!page || !page.rendered_markdown) {
-      return false;
+      return { saved: false, alreadyExists: false };
     }
 
     const pagesRef = isShared
@@ -145,12 +171,33 @@ export class FirestoreService {
       pageItem.structured_json = page.structured_json;
     }
 
+    if (isShared) {
+      const contentHash = sharedPageContentHash(pageItem.source_text);
+      if (contentHash) {
+        try {
+          await pagesRef.doc(contentHash).create(pageItem);
+        } catch (error) {
+          if (isAlreadyExistsError(error)) {
+            functions.logger.info(
+              `Shared analysis page already exists — dedup (hash=${contentHash})`
+            );
+            return { saved: false, alreadyExists: true };
+          }
+          throw error;
+        }
+        functions.logger.info(
+          `Saved analysis page to shared collection (hash=${contentHash})`
+        );
+        return { saved: true, alreadyExists: false };
+      }
+    }
+
     await pagesRef.add(pageItem);
     const logMessage = isShared
       ? `Saved analysis page to shared collection`
       : `Saved analysis page for user ${userId}`;
     functions.logger.info(logMessage);
-    return true;
+    return { saved: true, alreadyExists: false };
   }
 
   /**

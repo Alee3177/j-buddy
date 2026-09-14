@@ -142,7 +142,10 @@ class JaAlchemyApiService {
         success: true,
         words_count: result.data.saved?.words_count || 0,
         grammars_count: result.data.saved?.grammars_count || 0,
-        message: result.data.message || 'Analysis saved successfully'
+        message: result.data.message || 'Analysis saved successfully',
+        // P7.4: true only for a shared save whose content already existed in
+        // the shared collection (deduplicated server-side) — not an error.
+        alreadyExists: result.data.alreadyExists === true
       };
     } catch (error) {
       console.error('[Firebase API] SaveItems function error:', error);

@@ -50,7 +50,7 @@ beforeEach(() => {
   capturedItems = [];
   mockSaveVocabulary.mockResolvedValue(0);
   mockSaveGrammar.mockResolvedValue(0);
-  mockSaveAnalysisPage.mockResolvedValue(true);
+  mockSaveAnalysisPage.mockResolvedValue({ saved: true, alreadyExists: false });
   mockSavePersonalAnalysisPage.mockImplementation(
     async (
       _uid: string,
@@ -230,6 +230,89 @@ describe("saveItemsHandler — P7.4 item-count guard", () => {
       "alice"
     );
     expect(res.success).toBe(true);
+  });
+});
+
+// P7.4 — shared-collection deduplication. FirestoreService.saveAnalysisPage
+// is the authoritative dedup boundary (unit-tested directly in
+// firestoreService.test.ts); these tests verify the callable wires its
+// result correctly — including skipping vocab/grammar writes on a duplicate,
+// so a repeated identical shared save creates NO new documents anywhere.
+describe("saveItemsHandler — P7.4 shared-collection deduplication", () => {
+  const sharedAnalysis = () => ({
+    is_shared: true,
+    words: [{ term: "x" }],
+    grammars: [{ point: "〜ば" }],
+    page: PAGE,
+    metadata: META,
+  });
+
+  it("1. first authenticated shared save creates shared records", async () => {
+    mockSaveAnalysisPage.mockResolvedValueOnce({ saved: true, alreadyExists: false });
+    mockSaveVocabulary.mockResolvedValueOnce(1);
+    mockSaveGrammar.mockResolvedValueOnce(1);
+
+    const res = await callHandler({ analysis: sharedAnalysis() }, "alice");
+
+    expect(res.success).toBe(true);
+    expect(res.alreadyExists).toBe(false);
+    expect(mockSaveAnalysisPage).toHaveBeenCalledWith(null, PAGE, true, META);
+    expect(mockSaveVocabulary).toHaveBeenCalledWith(null, [{ term: "x" }], true, META);
+    expect(mockSaveGrammar).toHaveBeenCalledWith(null, [{ point: "〜ば" }], true, META);
+    expect(res.saved).toEqual({
+      words_count: 1,
+      grammars_count: 1,
+      page_saved: true,
+      learning_items_count: 0,
+    });
+  });
+
+  it("2/3. a second identical authenticated shared save creates no duplicate page and returns a clean alreadyExists signal (not an error)", async () => {
+    mockSaveAnalysisPage.mockResolvedValueOnce({ saved: false, alreadyExists: true });
+
+    const res = await callHandler({ analysis: sharedAnalysis() }, "alice");
+
+    expect(res.success).toBe(true);
+    expect(res.alreadyExists).toBe(true);
+    expect(res.message).toBe("This analysis already exists in the shared collection");
+    // No vocab/grammar write for a duplicate save — no orphan duplicates
+    // "tied to" a page that was never (re)created.
+    expect(mockSaveVocabulary).not.toHaveBeenCalled();
+    expect(mockSaveGrammar).not.toHaveBeenCalled();
+    expect(res.saved).toEqual({
+      words_count: 0,
+      grammars_count: 0,
+      page_saved: false,
+      learning_items_count: 0,
+    });
+  });
+
+  it("6. unauthenticated shared save is still rejected (dedup does not weaken auth)", async () => {
+    await expect(callHandler({ analysis: sharedAnalysis() })).rejects.toMatchObject({
+      code: "unauthenticated",
+    });
+    noWrites();
+  });
+
+  it("7. personal saves are never routed through the shared dedup path", async () => {
+    await callHandler(
+      { analysis: { page: PAGE, metadata: META } },
+      "alice"
+    );
+    // Personal path calls savePersonalAnalysisPage, never the shared
+    // saveAnalysisPage — dedup is shared-only in this phase.
+    expect(mockSaveAnalysisPage).not.toHaveBeenCalled();
+    expect(mockSavePersonalAnalysisPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("a shared save with no page has no source-text identity to dedupe against and always proceeds", async () => {
+    const res = await callHandler(
+      { analysis: { is_shared: true, words: [{ term: "x" }], grammars: [] } },
+      "alice"
+    );
+    expect(mockSaveAnalysisPage).not.toHaveBeenCalled();
+    expect(mockSaveVocabulary).toHaveBeenCalledWith(null, [{ term: "x" }], true, {});
+    expect(res.alreadyExists).toBe(false);
   });
 });
 
