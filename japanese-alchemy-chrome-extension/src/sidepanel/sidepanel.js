@@ -1005,6 +1005,13 @@ async function handleSaveForLater() {
         elements.alertMessage.classList.add('show');
         return;
     }
+    // P7.4: saveItems now requires sign-in for BOTH personal and shared
+    // saves (previously only personal saves were auth-gated). The button is
+    // disabled while signed out (updateAuthUI) so a normal user cannot reach
+    // this function without a session; if it's still reached without one
+    // (e.g. a race), the callable rejects with `unauthenticated` and
+    // jaAlchemyApiService.js maps that to a friendly, save-kind-specific
+    // sign-in message below — no separate pre-flight check duplicated here.
 
     // Check if button is already saving
     if (elements.saveForLaterBtn.classList.contains('saving')) return;
@@ -1281,6 +1288,7 @@ function updateAuthUI() {
         // incomplete/old analysis while a personal stream is still running.
         if (elements.saveForLaterBtn) {
             elements.saveForLaterBtn.disabled = !hasCompletedAnalysis;
+            elements.saveForLaterBtn.title = '儲存分析頁面';
         }
 
         // Enable share checkbox when logged in
@@ -1293,12 +1301,19 @@ function updateAuthUI() {
         elements.authSignedOut.style.display = 'flex';
         elements.authSignedIn.style.display = 'none';
 
-        // Enable Save For Later button even when logged out (for shared collections)
+        // P7.4: saveItems now requires an authenticated caller for BOTH
+        // personal AND shared saves (previously shared saves were
+        // unauthenticated). A signed-out save would always be rejected
+        // server-side now, so disable the button here instead of letting the
+        // user hit a failed save — with a title explaining why.
         if (elements.saveForLaterBtn) {
-            elements.saveForLaterBtn.disabled = false;
+            elements.saveForLaterBtn.disabled = true;
+            elements.saveForLaterBtn.title = '請先登入才能儲存或分享';
         }
 
-        // Auto-check share checkbox when logged out (items will be saved as shared)
+        // Auto-check share checkbox when logged out (items will be saved as shared
+        // once signed in). Left checked+disabled for continuity with the
+        // signed-in default; the save button above is what actually gates the save.
         if (elements.shareCheckbox && elements.shareCheckboxContainer) {
             elements.shareCheckbox.checked = true;
             elements.shareCheckbox.disabled = true; // Cannot uncheck when not logged in

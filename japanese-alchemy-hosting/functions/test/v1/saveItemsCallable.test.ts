@@ -117,24 +117,62 @@ describe("saveItemsHandler — auth hardening (personal saves)", () => {
     noWrites();
   });
 
-  it("5. shared save keeps its unauthenticated behaviour and derives no learning items", async () => {
-    const res = await callHandler({
-      userId: null,
-      analysis: {
-        is_shared: true,
-        words: [{ term: "x" }],
-        grammars: [{ point: "〜ば" }],
-        page: PAGE,
-        metadata: META,
+  // P7.4: shared saves used to be unauthenticated (anyone could repeatedly
+  // call saveItems(is_shared=true) with no rate limit, spamming the public
+  // shared_* collections / generating Firestore write cost). Publication now
+  // requires the same Firebase Auth context as a personal save.
+  it("5. rejects an unauthenticated shared save and writes nothing (P7.4)", async () => {
+    await expect(
+      callHandler({
+        userId: null,
+        analysis: {
+          is_shared: true,
+          words: [{ term: "x" }],
+          grammars: [{ point: "〜ば" }],
+          page: PAGE,
+          metadata: META,
+        },
+      })
+    ).rejects.toMatchObject({ code: "unauthenticated" });
+    noWrites();
+  });
+
+  it("5b. allows an authenticated shared save, still writes anonymously, and derives no learning items (P7.4)", async () => {
+    const res = await callHandler(
+      {
+        userId: null,
+        analysis: {
+          is_shared: true,
+          words: [{ term: "x" }],
+          grammars: [{ point: "〜ば" }],
+          page: PAGE,
+          metadata: META,
+        },
       },
-    });
+      "alice"
+    );
     expect(res.success).toBe(true);
+    // Shared writes remain anonymous even though the caller is authenticated
+    // — no uid is passed to the Firestore layer or stored on the document.
     expect(mockSaveVocabulary).toHaveBeenCalledWith(null, [{ term: "x" }], true, META);
     expect(mockSaveGrammar).toHaveBeenCalledWith(null, [{ point: "〜ば" }], true, META);
     expect(mockSaveAnalysisPage).toHaveBeenCalledWith(null, PAGE, true, META);
     expect(mockSavePersonalAnalysisPage).not.toHaveBeenCalled();
     expect(res.saved.learning_items_count).toBe(0);
     expect(capturedItems).toEqual([]);
+  });
+
+  it("5c. a spoofed data.userId cannot bypass auth on a shared save either (P7.4)", async () => {
+    await expect(
+      callHandler(
+        {
+          userId: "victimUid",
+          analysis: { is_shared: true, words: [{ term: "x" }], grammars: [], page: PAGE, metadata: META },
+        },
+        "attackerUid"
+      )
+    ).rejects.toMatchObject({ code: "permission-denied" });
+    noWrites();
   });
 
   it("treats is_shared values other than boolean true as a personal (auth-gated) save", async () => {

@@ -42,37 +42,44 @@ export async function saveItemsHandler(request: any): Promise<SaveItemsResponse>
    const isShared = analysis.is_shared === true;
    const metadata = analysis.metadata || {};
 
-  // v0.4 P1 auth hardening — personal saves.
+  // v0.4 P1 auth hardening (personal saves), extended P7.4 to shared saves.
   //
   // saveItems runs on the Admin SDK, which bypasses Firestore security rules,
-  // so the handler MUST authorize personal writes itself. Previously it trusted
-  // the client-supplied `userId` verbatim, which let any caller write under an
-  // arbitrary users/{uid} subtree. Now a personal save requires a Firebase Auth
-  // context, and the target user is ALWAYS the authenticated uid (never the
-  // client field). A present-but-mismatched `userId` is rejected outright as a
-  // sign of a confused or malicious client.
+  // so the handler MUST authorize every write itself. Previously it trusted
+  // the client-supplied `userId` verbatim for personal saves, which let any
+  // caller write under an arbitrary users/{uid} subtree — now the target user
+  // is ALWAYS the authenticated uid (never the client field), and a
+  // present-but-mismatched `userId` is rejected outright as a sign of a
+  // confused or malicious client.
   //
-  // Shared saves are unchanged: still unauthenticated, still writing to the
-  // public shared_* root collections, and never producing learning items.
-  let personalUserId: string | null = null;
-  if (!isShared) {
-    const authUid: string | undefined = request.auth?.uid;
-    if (!authUid) {
-      logger.warn("Rejected unauthenticated personal save");
-      throw new functions.https.HttpsError(
-        "unauthenticated",
-        "You must be signed in to save to your personal collection"
-      );
-    }
-    if (userId != null && userId !== authUid) {
-      logger.warn("Rejected personal save: userId does not match authenticated user");
-      throw new functions.https.HttpsError(
-        "permission-denied",
-        "userId does not match the authenticated user"
-      );
-    }
-    personalUserId = authUid;
+  // P7.4: shared saves were unauthenticated, which let anyone repeatedly call
+  // saveItems(is_shared=true) and spam the public shared_* collections /
+  // generate Firestore write cost with no rate limit at all (unlike
+  // explain/explainStreamCallable, which are public but rate-limited).
+  // Publication now requires the SAME Firebase Auth context as a personal
+  // save — this keeps analysis itself (explain/explainStreamCallable) public,
+  // but any write via saveItems, personal or shared, requires a signed-in
+  // caller. Shared documents remain publicly READABLE per firestore.rules
+  // (unchanged) and are still written anonymously (no author uid is stored on
+  // the document) — only the ability to invoke the write is now auth-gated.
+  const authUid: string | undefined = request.auth?.uid;
+  if (!authUid) {
+    logger.warn(`Rejected unauthenticated ${isShared ? "shared" : "personal"} save`);
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      isShared
+        ? "You must be signed in to share items with other learners"
+        : "You must be signed in to save to your personal collection"
+    );
   }
+  if (userId != null && userId !== authUid) {
+    logger.warn("Rejected save: userId does not match authenticated user");
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "userId does not match the authenticated user"
+    );
+  }
+  const personalUserId: string | null = isShared ? null : authUid;
 
   logger.info(`saveItems received`, {
     userId: personalUserId || 'shared',

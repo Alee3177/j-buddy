@@ -268,7 +268,10 @@ describe('JaAlchemyApiService', () => {
       ).rejects.toThrow('您必須先登入，才能將項目儲存至私人收藏。');
     });
 
-    test('does not apply the personal-save sign-in message to a shared-save error', async () => {
+    // P7.4: saveItems now requires sign-in for shared saves too, so an
+    // unauthenticated shared save gets its own friendly sign-in message
+    // instead of the raw callable error text.
+    test('translates an unauthenticated callable error into the shared-save sign-in message', async () => {
       const authError = Object.assign(new Error('unauthenticated'), { code: 'unauthenticated' });
       const callable = jest.fn(async () => { throw authError; });
       mockHttpsCallable.mockReturnValue(callable);
@@ -277,7 +280,7 @@ describe('JaAlchemyApiService', () => {
 
       await expect(
         new JaAlchemyApiService().saveAnalysis(sharedAnalysis, null)
-      ).rejects.toThrow('Firebase saveItems 函式失敗：unauthenticated');
+      ).rejects.toThrow('您必須先登入，才能與他人分享項目。');
     });
 
     test('throws the server-reported message when the callable resolves with success: false', async () => {

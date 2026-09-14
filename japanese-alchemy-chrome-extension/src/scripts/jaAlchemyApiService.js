@@ -148,9 +148,16 @@ class JaAlchemyApiService {
       console.error('[Firebase API] SaveItems function error:', error);
       
       // Handle specific Firebase errors
-      // Handle specific authentication errors (only for private collections)
-      if (!analysis.is_shared && (error.code === 'unauthenticated' || error.message?.includes('unauthenticated'))) {
-        throw new Error('您必須先登入，才能將項目儲存至私人收藏。');
+      // P7.4: saveItems requires sign-in for BOTH personal and shared saves
+      // (previously only personal saves were auth-gated) — give a friendly,
+      // save-kind-specific message for either, instead of the raw callable
+      // error text.
+      if (error.code === 'unauthenticated' || error.message?.includes('unauthenticated')) {
+        throw new Error(
+          analysis.is_shared
+            ? '您必須先登入，才能與他人分享項目。'
+            : '您必須先登入，才能將項目儲存至私人收藏。'
+        );
       }
       
       // Extract error details
