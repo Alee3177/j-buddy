@@ -158,7 +158,7 @@ export function LearningItemsPanel({
       <EmptyState
         title="還沒有學習項目"
         description={<p>儲存日文分析內容後，單字與文法會出現在這裡。</p>}
-        notice={{ body: 'Chrome Extension 整合功能目前正在準備中。' }}
+        notice={{ body: '你可以使用 J-Buddy Chrome Extension 分析日文內容並儲存到這裡。' }}
         action={{ label: '查看如何使用', href: '/how-to-use' }}
       />
     );

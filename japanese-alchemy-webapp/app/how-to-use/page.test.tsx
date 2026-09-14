@@ -36,12 +36,20 @@ describe('How to Use page', () => {
     expect(html).toContain('使用 Google 帳號登入 J-Buddy。');
   });
 
-  it('renders step 2\'s status notice with the 目前功能狀態 title and P6.5-C copy', () => {
+  // P7.5 — the Extension is fully available in production (analyze + save +
+  // share, all shipped and verified across P7.3/P7.4); step 2 must say so.
+  it("describes step 2's Extension usage as available now, including sign-in for save/share", () => {
     const html = renderToStaticMarkup(<HowToUsePage />);
-    expect(html).toContain('目前功能狀態');
     expect(html).toContain(
-      'Chrome Extension 與自動儲存功能正在升級整合中，目前暫時無法建立新的學習內容。'
+      '你可以使用 J-Buddy Chrome Extension，在日文網站選取文字並進行 AI 分析；登入後可儲存分析內容或與其他學習者分享。'
     );
+  });
+
+  it('does not claim the Extension is a future capability or temporarily unavailable', () => {
+    const html = renderToStaticMarkup(<HowToUsePage />);
+    expect(html).not.toContain('未來可使用');
+    expect(html).not.toContain('整合中');
+    expect(html).not.toContain('目前暫時無法建立新的學習內容');
   });
 
   it('points step 3 at the 學習項目 tab', () => {

@@ -16,11 +16,7 @@ const steps: Step[] = [
   },
   {
     title: 'Step 2｜取得日文學習內容',
-    body: '未來可使用 J-Buddy Chrome Extension，在日文網站選取文字並進行 AI 分析。',
-    notice: {
-      title: '目前功能狀態',
-      body: 'Chrome Extension 與自動儲存功能正在升級整合中，目前暫時無法建立新的學習內容。',
-    },
+    body: '你可以使用 J-Buddy Chrome Extension，在日文網站選取文字並進行 AI 分析；登入後可儲存分析內容或與其他學習者分享。',
   },
   {
     title: 'Step 3｜整理學習項目',

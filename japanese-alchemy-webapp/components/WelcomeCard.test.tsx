@@ -35,11 +35,14 @@ describe('WelcomeCard', () => {
     );
   });
 
-  it('renders all four usage steps in order, with step 2 marked as 整合中', () => {
+  // P7.5 — the Extension is fully available in production (analyze + save +
+  // share, all shipped and verified across P7.3/P7.4); step 2 must say so,
+  // not claim it is still being integrated.
+  it('renders all four usage steps in order, with step 2 describing the available Extension', () => {
     const html = renderToStaticMarkup(<WelcomeCard />);
     const steps = [
       '在網頁看到想學的日文',
-      '使用 J-Buddy Extension 分析並儲存（整合中）',
+      '使用 J-Buddy Chrome Extension 選取網頁中的日文內容，進行 AI 分析並儲存到學習項目。',
       '回到 J-Buddy 查看「學習項目」',
       '將內容加入「複習」',
     ];
@@ -48,12 +51,10 @@ describe('WelcomeCard', () => {
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
   });
 
-  it('renders the 目前功能狀態 status notice with the P6.5-C copy', () => {
+  it('does not claim the Extension is still being integrated or temporarily unavailable', () => {
     const html = renderToStaticMarkup(<WelcomeCard />);
-    expect(html).toContain('目前功能狀態');
-    expect(html).toContain(
-      'Chrome Extension 與自動儲存功能正在升級整合中，目前暫時無法建立新的學習內容。'
-    );
+    expect(html).not.toContain('整合中');
+    expect(html).not.toContain('目前暫時無法建立新的學習內容');
   });
 
   it('renders a primary-styled CTA linking to /how-to-use', () => {

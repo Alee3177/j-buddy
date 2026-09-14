@@ -72,9 +72,12 @@ describe('LearningItemsPanel', () => {
     expect(html).toContain('儲存日文分析內容後，單字與文法會出現在這裡。');
   });
 
-  it('renders the extension status as a distinct notice (P6.5-C)', () => {
+  // P7.5 — the Extension is fully available in production; the empty-state
+  // notice must say so, not claim integration is still in progress.
+  it('renders the extension availability as a distinct notice (P6.5-C)', () => {
     const html = render(ready([]));
-    expect(html).toContain('Chrome Extension 整合功能目前正在準備中。');
+    expect(html).toContain('你可以使用 J-Buddy Chrome Extension 分析日文內容並儲存到這裡。');
+    expect(html).not.toContain('整合功能目前正在準備中');
   });
 
   it('renders a primary-styled 查看如何使用 CTA linking to /how-to-use', () => {
