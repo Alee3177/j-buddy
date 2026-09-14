@@ -146,12 +146,16 @@ export function startFirstPageFeed(
         if (!isCurrent()) return;
         dispatch({ type: 'FIRST_PAGE_OK', result });
       },
-      () => {
+      (error) => {
+        // P7.4 — see the matching comment in lib/userCollectionFeed.ts: this
+        // previously reset the feed with no trace anywhere.
+        console.error('Live subscription failed:', error);
         if (!isCurrent()) return;
         dispatch({ type: 'FIRST_PAGE_FAILED' });
       }
     );
-  } catch {
+  } catch (error) {
+    console.error('Live subscription failed to start:', error);
     if (isCurrent()) dispatch({ type: 'FIRST_PAGE_FAILED' });
     return NOOP_UNSUBSCRIBE;
   }

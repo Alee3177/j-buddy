@@ -138,19 +138,23 @@ describe('useUserCollectionFeed', () => {
     feed.unmount();
   });
 
-  it('resets to empty on a subscription error', async () => {
+  it('resets to empty on a subscription error, and logs it (P7.4 — no silent swallow)', async () => {
     const { subscribe, subs } = stubSubscriber();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true });
     await feed.mount();
     await act(async () => {
       subs[0].emit([{ id: 'a' }]);
     });
 
+    const error = new Error('permission-denied');
     await act(async () => {
-      subs[0].fail(new Error('permission-denied'));
+      subs[0].fail(error);
     });
     expect(feed.items()).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(expect.any(String), error);
 
+    consoleError.mockRestore();
     feed.unmount();
   });
 

@@ -343,16 +343,21 @@ describe('useLearningItemsFeed', () => {
     feed.unmount();
   });
 
-  it('surfaces a subscription error as the error phase', async () => {
+  it('surfaces a subscription error as the error phase, and logs it (P7.4 — no silent swallow)', async () => {
     const subs = stubSubscriptions();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const feed = mountFeed({ uid: 'u1', authResolved: true });
     await feed.mount();
 
+    const error = new Error('permission-denied');
     await act(async () => {
-      subs[0].fail(new Error('permission-denied'));
+      subs[0].fail(error);
     });
 
     expect(feed.state().phase).toBe('error');
+    expect(consoleError).toHaveBeenCalledWith(expect.any(String), error);
+
+    consoleError.mockRestore();
     feed.unmount();
   });
 });

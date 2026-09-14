@@ -150,8 +150,9 @@ describe('startFirstPageFeed', () => {
     expect(typeof result).toBe('function');
   });
 
-  it('dispatches PENDING then FAILED when the subscription reports an error', () => {
+  it('dispatches PENDING then FAILED when the subscription reports an error, and logs it (P7.4)', () => {
     const dispatch = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     let onError!: (e: unknown) => void;
     const subscribe = vi.fn((_res: unknown, err: typeof onError) => {
       onError = err;
@@ -159,16 +160,20 @@ describe('startFirstPageFeed', () => {
     });
 
     startFirstPageFeed(dispatch, () => true, subscribe);
-    onError(new Error('boom'));
+    const error = new Error('boom');
+    onError(error);
 
     expect(dispatch.mock.calls.map((c) => c[0].type)).toEqual([
       'FIRST_PAGE_PENDING',
       'FIRST_PAGE_FAILED',
     ]);
+    expect(consoleError).toHaveBeenCalledWith(expect.any(String), error);
+    consoleError.mockRestore();
   });
 
-  it('dispatches PENDING then FAILED when subscribing throws synchronously', () => {
+  it('dispatches PENDING then FAILED when subscribing throws synchronously, and logs it (P7.4)', () => {
     const dispatch = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const subscribe = vi.fn(() => {
       throw new Error('not signed in');
     });
@@ -179,7 +184,9 @@ describe('startFirstPageFeed', () => {
       'FIRST_PAGE_PENDING',
       'FIRST_PAGE_FAILED',
     ]);
+    expect(consoleError).toHaveBeenCalledWith(expect.any(String), expect.any(Error));
     expect(() => unsubscribe()).not.toThrow();
+    consoleError.mockRestore();
   });
 
   it('discards an emission that arrives after the generation changed', () => {

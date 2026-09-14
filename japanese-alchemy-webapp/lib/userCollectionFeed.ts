@@ -80,7 +80,12 @@ export function useUserCollectionFeed<T>(
         if (generationRef.current !== generation) return;
         dispatch({ type: 'DATA', items: next });
       },
-      () => {
+      (error) => {
+        // P7.4 — this previously reset the list with no trace anywhere: a
+        // developer investigating "why is this tab empty" had nothing to go
+        // on. The dispatch already fails safe (never fabricates stale data);
+        // this only adds the missing diagnostic breadcrumb.
+        console.error('Live subscription failed:', error);
         if (generationRef.current !== generation) return;
         dispatch({ type: 'RESET' });
       }
