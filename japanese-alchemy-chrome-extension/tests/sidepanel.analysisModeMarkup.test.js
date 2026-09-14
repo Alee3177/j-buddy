@@ -31,9 +31,18 @@ describe('sidepanel analysis-mode markup', () => {
     expect(html).not.toContain('LLM API 提供者');
     expect(html).not.toContain('data-provider-mode');
     expect(html).not.toContain('API 金鑰');
-    expect(html).toContain('登入即可私密儲存項目；不登入也可儲存至共享收藏。');
     expect(html).not.toContain('data-ai-preference');
     expect(html).not.toContain('aiPreference');
+  });
+
+  // P7.4 follow-up: saveItems now requires sign-in for BOTH personal and
+  // shared saves (previously shared saves were unauthenticated), so the
+  // signed-out explanatory copy must no longer claim an unauthenticated user
+  // can save to the shared collection.
+  test('signed-out copy accurately reflects that saving/sharing both require sign-in', () => {
+    expect(html).toContain('登入後即可儲存分析項目或與他人分享；未登入仍可使用分析功能。');
+    expect(html).not.toContain('登入即可私密儲存項目；不登入也可儲存至共享收藏。');
+    expect(html).not.toContain('不登入也可儲存至共享收藏');
   });
 
   test('keeps the top controls in one horizontal row', () => {
