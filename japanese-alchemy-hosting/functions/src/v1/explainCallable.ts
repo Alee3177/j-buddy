@@ -14,6 +14,8 @@ import {
   TranslationFailedError,
   UnsupportedLanguageError,
 } from "./multilingualPreStage";
+import { RetryableProviderError } from "../services/httpRetry";
+import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "./providerBusyMessages";
 
 export async function explainHandler(
   request: any
@@ -92,10 +94,24 @@ export async function explainHandler(
     }
     if (error instanceof TranslationFailedError) {
       logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);
+      // P8-C1.5: a translation failure caused by exhausted provider retries
+      // (429/5xx) gets the "busy, try later" message; any other translation
+      // failure (empty output, over the translated-content ceiling, a
+      // non-retryable provider error) keeps the generic message — it isn't
+      // a transient/retry situation, so "busy" would be misleading.
+      const busy = error.cause instanceof RetryableProviderError;
       throw new functions.https.HttpsError(
         "internal",
-        "Translation to Japanese failed. Please try again."
+        busy ? TRANSLATION_BUSY_MESSAGE : "Translation to Japanese failed. Please try again."
       );
+    }
+    if (error instanceof RetryableProviderError) {
+      // P8-C1.5: the ANALYSIS-stage call exhausted its retries — never leak
+      // the raw provider string (e.g. "Gemini API error: 429 Too Many
+      // Requests") to the client; full detail is already in the service
+      // layer's per-attempt logger.error calls.
+      logger.error("Analysis provider temporarily unavailable after retries", error);
+      throw new functions.https.HttpsError("internal", ANALYSIS_BUSY_MESSAGE);
     }
     logger.error("Error in explain callable", error);
     throw new functions.https.HttpsError(

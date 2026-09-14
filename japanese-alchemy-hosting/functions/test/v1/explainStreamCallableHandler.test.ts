@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 import { explainStreamCallableHandler } from "../../src/v1/explainStreamCallableHandler";
 import { checkRateLimit } from "../../src/v1/rateLimiter";
 import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
+import { RetryableProviderError } from "../../src/services/httpRetry";
+import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "../../src/v1/providerBusyMessages";
 
 const mockStreamCompletion = jest.fn() as any;
 const mockChatCompletion = jest.fn() as any;
@@ -204,6 +206,70 @@ describe("explainStreamCallableHandler", () => {
       expect(result.success).toBe(false);
       expect(mockChatCompletion).not.toHaveBeenCalled();
       expect(mockStreamCompletion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("P8-C1.5 rate-limit / retry hardening", () => {
+    it("sanitizes an exhausted-retry TRANSLATION failure to the busy message, never the raw provider text", async () => {
+      mockChatCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      const result = await explainStreamCallableHandler(
+        { data: { content: "这是一个测试" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(result).toEqual({ success: false, error: TRANSLATION_BUSY_MESSAGE });
+      expect(result.error).not.toContain("Gemini API error");
+      expect(result.error).not.toContain("429");
+      expect(mockStreamCompletion).not.toHaveBeenCalled();
+    });
+
+    it("sanitizes an exhausted-retry ANALYSIS failure to the busy message on the Japanese fast path", async () => {
+      mockStreamCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      const result = await explainStreamCallableHandler(
+        { data: { content: "テストです" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(result).toEqual({ success: false, error: ANALYSIS_BUSY_MESSAGE });
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("sanitizes an exhausted-retry ANALYSIS failure after a successful translation (zh)", async () => {
+      mockChatCompletion.mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } });
+      mockStreamCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      const result = await explainStreamCallableHandler(
+        { data: { content: "这是一个测试" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(result).toEqual({ success: false, error: ANALYSIS_BUSY_MESSAGE });
+    });
+
+    it("a non-retryable translation failure keeps the existing generic message, unaffected by the busy-message change", async () => {
+      mockChatCompletion.mockRejectedValueOnce(new Error("provider unavailable"));
+      const response = { sendChunk: jest.fn(async (_chunk: unknown) => true) };
+
+      const result = await explainStreamCallableHandler(
+        { data: { content: "这是一个测试" }, acceptsStreaming: true, rawRequest: { ip: "127.0.0.1" } } as any,
+        response as any
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "Translation to Japanese failed. Please try again.",
+      });
     });
   });
 });

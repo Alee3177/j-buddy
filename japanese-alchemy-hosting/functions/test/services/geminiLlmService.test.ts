@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from "@jest/globals";
 import { GeminiLlmService } from "../../src/services/geminiLlmService";
+import { RetryableProviderError } from "../../src/services/httpRetry";
 
 // Mock the config so configSecret.value().gemini returns test credentials.
 jest.mock("../../src/config", () => ({
@@ -32,7 +33,11 @@ describe("GeminiLlmService", () => {
 
   beforeEach(() => {
     mockFetch.mockClear();
-    service = new GeminiLlmService();
+    // P8-C1.5: tiny baseDelayMs so any retry (429/5xx) in these tests
+    // resolves near-instantly instead of waiting the production ~500ms/
+    // ~1500ms backoff. Test-only override — createLlmService() in
+    // production code never passes this.
+    service = new GeminiLlmService({ baseDelayMs: 1 });
   });
 
   describe("Constructor", () => {
@@ -234,6 +239,103 @@ describe("GeminiLlmService", () => {
       const result = await service.chatCompletion(mockSystemPrompt, specialContent);
 
       expect(result.response.success).toBe(true);
+    });
+  });
+
+  describe("P8-C1.5 retry hardening", () => {
+    const mockResponse = {
+      model: "gemini-3-flash-preview",
+      choices: [{ finish_reason: "stop", message: { content: "Test response" } }],
+    };
+
+    it("retries a 429 and succeeds — chatCompletion", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 429, statusText: "Too Many Requests", text: async () => "" })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockResponse });
+
+      const result = await service.chatCompletion(mockSystemPrompt, mockContent);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result.response.data).toBe("Test response");
+    });
+
+    it("repeated 429 exhausts the bounded retry (3 attempts total) then throws", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 429,
+        statusText: "Too Many Requests",
+        text: async () => "",
+      });
+
+      await expect(service.chatCompletion(mockSystemPrompt, mockContent))
+        .rejects.toThrow("Gemini API error: 429 Too Many Requests");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("the exhausted-retry error is a RetryableProviderError carrying the status", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 429,
+        statusText: "Too Many Requests",
+        text: async () => "",
+      });
+
+      expect.assertions(2);
+      try {
+        await service.chatCompletion(mockSystemPrompt, mockContent);
+      } catch (error) {
+        expect(error).toBeInstanceOf(RetryableProviderError);
+        expect((error as RetryableProviderError).status).toBe(429);
+      }
+    });
+
+    it("retries a transient 503 and succeeds — chatCompletion", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 503, statusText: "Service Unavailable", text: async () => "" })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockResponse });
+
+      const result = await service.chatCompletion(mockSystemPrompt, mockContent);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result.response.data).toBe("Test response");
+    });
+
+    it("does not retry a non-retryable 4xx (e.g. 400) — single attempt", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => "",
+      });
+
+      await expect(service.chatCompletion(mockSystemPrompt, mockContent))
+        .rejects.toThrow("Gemini API error: 400 Bad Request");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a 429 and succeeds — streamCompletion", async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 429, statusText: "Too Many Requests", text: async () => "" })
+        .mockResolvedValueOnce({ ok: true });
+
+      const result = await service.streamCompletion(mockSystemPrompt, mockContent);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result.requestedModel).toBe("test-model");
+    });
+
+    it("does not retry a non-retryable 4xx — streamCompletion single attempt", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        text: async () => "",
+      });
+
+      await expect(service.streamCompletion(mockSystemPrompt, mockContent)).rejects.toThrow(
+        "Gemini API error: 401 Unauthorized"
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 

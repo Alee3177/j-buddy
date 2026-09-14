@@ -2,17 +2,22 @@ import * as functions from "firebase-functions";
 import { LlmRequest, LlmResponse, SuccessResponse } from "../models/types";
 import { configSecret } from "../config";
 import { LlmBatchCompletion, LlmService, LlmStreamCompletion } from "./llmService";
+import { isRetryableStatus, RetryableProviderError, RetryOptions, withProviderRetry } from "./httpRetry";
 
 export class ZaiLlmService implements LlmService {
   private apiUrl: string;
   private apiKey: string;
   private model: string;
+  // P8-C1.5: internal-only, not part of the LlmService contract — see the
+  // matching field on GeminiLlmService for the rationale.
+  private retryOptions?: RetryOptions;
 
-  constructor() {
+  constructor(retryOptions?: RetryOptions) {
     const config = configSecret.value();
     this.apiUrl = config.zai.api_url;
     this.apiKey = config.zai.api_key;
     this.model = config.zai.model;
+    this.retryOptions = retryOptions;
 
     if (!this.apiKey) {
       throw new Error("ZAI API key not found in JAPANESE_ALCHEMY_CONFIG secret");
@@ -33,34 +38,37 @@ export class ZaiLlmService implements LlmService {
       stream: true,
     };
 
-    functions.logger.info("Calling ZAI API (streaming)", {
-      model: this.model,
-      messagesCount: messages.length,
-    });
-
-    const response = await fetch(`${this.apiUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      functions.logger.error("ZAI API Error (streaming)", {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText,
+    return withProviderRetry(async () => {
+      functions.logger.info("Calling ZAI API (streaming)", {
+        model: this.model,
+        messagesCount: messages.length,
       });
-      throw new functions.https.HttpsError(
-        "internal",
-        `ZAI API error: ${response.status} ${response.statusText}`
-      );
-    }
 
-    return { response, requestedModel: this.model };
+      const response = await fetch(`${this.apiUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        functions.logger.error("ZAI API Error (streaming)", {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText,
+        });
+        const message = `ZAI API error: ${response.status} ${response.statusText}`;
+        if (isRetryableStatus(response.status)) {
+          throw new RetryableProviderError(response.status, message);
+        }
+        throw new functions.https.HttpsError("internal", message);
+      }
+
+      return { response, requestedModel: this.model };
+    }, this.retryOptions);
   }
 
   async chatCompletion(systemPrompt: string, content: string): Promise<LlmBatchCompletion> {
@@ -76,48 +84,51 @@ export class ZaiLlmService implements LlmService {
       max_tokens: 8192,
     };
 
-    functions.logger.info("Calling ZAI API", {
-      model: this.model,
-      messagesCount: messages.length,
-    });
-
-    const response = await fetch(`${this.apiUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      functions.logger.error("ZAI API Error", {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText,
+    return withProviderRetry(async () => {
+      functions.logger.info("Calling ZAI API", {
+        model: this.model,
+        messagesCount: messages.length,
       });
-      throw new functions.https.HttpsError(
-        "internal",
-        `ZAI API error: ${response.status} ${response.statusText}`
-      );
-    }
 
-    functions.logger.info("ZAI API Success");
-    const data = await response.json() as LlmResponse;
+      const response = await fetch(`${this.apiUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
 
-    const result: SuccessResponse = {
-      success: true,
-      data: data.choices[0].message.content,
-      timestamp: Date.now(),
-    };
+      if (!response.ok) {
+        const errorText = await response.text();
+        functions.logger.error("ZAI API Error", {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText,
+        });
+        const message = `ZAI API error: ${response.status} ${response.statusText}`;
+        if (isRetryableStatus(response.status)) {
+          throw new RetryableProviderError(response.status, message);
+        }
+        throw new functions.https.HttpsError("internal", message);
+      }
 
-    return {
-      response: result,
-      requestedModel: this.model,
-      usage: data.usage,
-      responseModel: data.model,
-      finishReason: data.choices[0].finish_reason,
-    };
+      functions.logger.info("ZAI API Success");
+      const data = await response.json() as LlmResponse;
+
+      const result: SuccessResponse = {
+        success: true,
+        data: data.choices[0].message.content,
+        timestamp: Date.now(),
+      };
+
+      return {
+        response: result,
+        requestedModel: this.model,
+        usage: data.usage,
+        responseModel: data.model,
+        finishReason: data.choices[0].finish_reason,
+      };
+    }, this.retryOptions);
   }
 }

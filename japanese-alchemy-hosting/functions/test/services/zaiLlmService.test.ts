@@ -19,7 +19,9 @@ describe("ZaiLlmService", () => {
 
   beforeEach(() => {
     mockFetch.mockClear();
-    service = new ZaiLlmService();
+    // P8-C1.5: tiny baseDelayMs so any retry (429/5xx) in these tests
+    // resolves near-instantly. Test-only override.
+    service = new ZaiLlmService({ baseDelayMs: 1 });
   });
 
   it("retains batch usage beside the callable response", async () => {

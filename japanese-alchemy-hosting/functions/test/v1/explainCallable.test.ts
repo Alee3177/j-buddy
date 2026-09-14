@@ -4,6 +4,8 @@ import { checkRateLimit } from "../../src/v1/rateLimiter";
 import { SYSTEM_PROMPT_V1 } from "../../src/models/systemPromptV1";
 import { SYSTEM_PROMPT_V2 } from "../../src/models/systemPromptV2";
 import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
+import { RetryableProviderError } from "../../src/services/httpRetry";
+import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "../../src/v1/providerBusyMessages";
 
 // `mock`-prefixed vars are the one exception jest allows inside a mock factory.
 // Cast as any: jest.fn() infers `never` under this global jest typing, which
@@ -186,6 +188,69 @@ describe("explainHandler", () => {
 
       expect(result.preStage).toBeUndefined();
       expect(Object.prototype.hasOwnProperty.call(result, "preStage")).toBe(false);
+    });
+  });
+
+  describe("P8-C1.5 rate-limit / retry hardening", () => {
+    it("sanitizes an exhausted-retry TRANSLATION failure to the busy message, never the raw provider text", async () => {
+      mockChatCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+
+      await expect(
+        explainHandler({ data: { content: "这是一个测试" } } as any)
+      ).rejects.toMatchObject({ code: "internal", message: TRANSLATION_BUSY_MESSAGE });
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    });
+
+    it("sanitizes an exhausted-retry ANALYSIS failure to the busy message on the Japanese fast path (single LLM call)", async () => {
+      mockChatCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+
+      await expect(
+        explainHandler({ data: { content: "テストです" } } as any)
+      ).rejects.toMatchObject({ code: "internal", message: ANALYSIS_BUSY_MESSAGE });
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    });
+
+    it("sanitizes an exhausted-retry ANALYSIS failure after a successful translation (zh, second LLM call)", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockRejectedValueOnce(new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests"));
+
+      await expect(
+        explainHandler({ data: { content: "这是一个测试" } } as any)
+      ).rejects.toMatchObject({ code: "internal", message: ANALYSIS_BUSY_MESSAGE });
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+    });
+
+    it("never leaks the raw provider error string to the client for a retry-exhausted failure", async () => {
+      mockChatCompletion.mockRejectedValueOnce(
+        new RetryableProviderError(429, "Gemini API error: 429 Too Many Requests")
+      );
+
+      expect.assertions(2);
+      try {
+        await explainHandler({ data: { content: "テストです" } } as any);
+      } catch (error: any) {
+        expect(error.message).not.toContain("Gemini API error");
+        expect(error.message).not.toContain("429");
+      }
+    });
+
+    it("a non-retryable translation failure keeps the existing generic message, unaffected by the busy-message change", async () => {
+      mockChatCompletion.mockRejectedValueOnce(new Error("provider unavailable"));
+
+      await expect(
+        explainHandler({ data: { content: "这是一个测试" } } as any)
+      ).rejects.toMatchObject({
+        code: "internal",
+        message: "Translation to Japanese failed. Please try again.",
+      });
     });
   });
 });

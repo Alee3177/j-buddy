@@ -16,6 +16,8 @@ import {
   UnsupportedLanguageError,
 } from "./multilingualPreStage";
 import { detectLanguage } from "../services/languageDetection";
+import { RetryableProviderError } from "../services/httpRetry";
+import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "./providerBusyMessages";
 
 interface StreamChunk {
   content: string;
@@ -151,7 +153,20 @@ export async function explainStreamCallableHandler(
     }
     if (error instanceof TranslationFailedError) {
       logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);
-      return { success: false, error: "Translation to Japanese failed. Please try again." };
+      // P8-C1.5: same busy/generic split as explainHandler — see the
+      // comment there.
+      const busy = error.cause instanceof RetryableProviderError;
+      return {
+        success: false,
+        error: busy ? TRANSLATION_BUSY_MESSAGE : "Translation to Japanese failed. Please try again.",
+      };
+    }
+    if (error instanceof RetryableProviderError) {
+      // P8-C1.5: the ANALYSIS-stage call exhausted its retries — never leak
+      // the raw provider string to the client; full detail is already in
+      // the service layer's per-attempt logger.error calls.
+      logger.error("Analysis provider temporarily unavailable after retries", error);
+      return { success: false, error: ANALYSIS_BUSY_MESSAGE };
     }
     logger.error("Error in callable streaming explain", error);
     return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
