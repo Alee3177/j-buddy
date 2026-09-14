@@ -68,6 +68,80 @@ describe('JaAlchemyApiService', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  test('P8-B: surfaces a status chunk via onStatus without appending its empty content', async () => {
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { content: '', status: 'translating' };
+          yield { content: '分' };
+          yield { content: '析' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onChunk = jest.fn();
+    const onDone = jest.fn();
+    const onError = jest.fn();
+    const onStatus = jest.fn();
+
+    await new JaAlchemyApiService().generateResponseStream(
+      '这是一个测试', 'v2', undefined, onChunk, onDone, onError, { onStatus }
+    );
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith('translating');
+    expect(onChunk).toHaveBeenNthCalledWith(1, '分', '分');
+    expect(onChunk).toHaveBeenNthCalledWith(2, '析', '分析');
+    expect(onChunk).toHaveBeenCalledTimes(2);
+    expect(onDone).toHaveBeenCalledWith('分析');
+  });
+
+  test('P8-B: never calls onStatus for a Japanese fast-path stream (no status chunk sent)', async () => {
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { content: '分' };
+          yield { content: '析' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onStatus = jest.fn();
+
+    await new JaAlchemyApiService().generateResponseStream(
+      'テストです', 'v2', undefined, jest.fn(), jest.fn(), jest.fn(), { onStatus }
+    );
+
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  test('P8-B: tolerates a missing onStatus callback when a status chunk arrives', async () => {
+    const callable = jest.fn();
+    callable.stream = jest.fn(async () => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          yield { content: '', status: 'translating' };
+          yield { content: '分' };
+        },
+      },
+      data: Promise.resolve({ success: true }),
+    }));
+    mockHttpsCallable.mockReturnValue(callable);
+    const onChunk = jest.fn();
+
+    await expect(
+      new JaAlchemyApiService().generateResponseStream(
+        '这是一个测试', 'v2', undefined, onChunk, jest.fn(), jest.fn()
+      )
+    ).resolves.toBeUndefined();
+
+    expect(onChunk).toHaveBeenCalledWith('分', '分');
+  });
+
   test('silently stops a managed stream cancelled before its first chunk', async () => {
     const controller = new AbortController();
     const abortError = new Error('aborted');

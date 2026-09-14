@@ -243,6 +243,83 @@ describe('sidepanel analysis-mode behavior', () => {
     });
   });
 
+  describe('P8-B translation status UX', () => {
+    test('shows 「日本語に変換しています…」 when the callable signals status:"translating"', async () => {
+      const apiCalls = setupDeferredApi();
+      const { loading, loadingMessage } = setupElements();
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      expect(apiCalls).toHaveLength(1);
+      apiCalls[0].options.onStatus('translating');
+
+      expect(loadingMessage.textContent).toBe('「日本語に変換しています…」');
+      expect(loading.classList.contains('show')).toBe(true);
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+    });
+
+    test('the first real analysis chunk clears/replaces the translating status', async () => {
+      const apiCalls = setupDeferredApi();
+      const { loadingMessage } = setupElements();
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onStatus('translating');
+      expect(loadingMessage.textContent).toBe('「日本語に変換しています…」');
+
+      apiCalls[0].onChunk('分析', '分析');
+      expect(loadingMessage.textContent).toBe('已收到分析結果，正在整理版面…');
+      expect(loadingMessage.textContent).not.toContain('日本語に変換しています');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+    });
+
+    test('Japanese input never shows the translating status (fast path unchanged)', async () => {
+      const apiCalls = setupDeferredApi();
+      const { loadingMessage } = setupElements();
+
+      const analysisPromise = analizingSelectedText('成長を後押しする', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      expect(loadingMessage.textContent).toBe('AI 正在分析，請稍候…');
+      expect(apiCalls[0].options.onStatus).toBeInstanceOf(Function);
+      // The real backend never sends a status chunk for Japanese input, so
+      // onStatus is simply never invoked here — asserting the loading
+      // message stays on the ordinary analysis copy throughout.
+      apiCalls[0].onChunk('分析', '分析');
+      expect(loadingMessage.textContent).toBe('已收到分析結果，正在整理版面…');
+      expect(loadingMessage.textContent).not.toContain('日本語に変換しています');
+
+      apiCalls[0].onDone('### 單字分析\n#### <單字>成長\ngrowth');
+      apiCalls[0].resolve();
+      await analysisPromise;
+    });
+
+    test('a translation/pre-stage error clears the loading state and shows a clean error message', async () => {
+      const apiCalls = setupDeferredApi();
+      const { loading, alertMessage } = setupElements();
+
+      const analysisPromise = analizingSelectedText('这是一个测试', {}, { promptVariant: 'v2' });
+      await flushMicrotasks();
+
+      apiCalls[0].options.onStatus('translating');
+      apiCalls[0].onError('Translation to Japanese failed. Please try again.');
+      apiCalls[0].resolve();
+      await analysisPromise;
+
+      expect(loading.classList.contains('show')).toBe(false);
+      expect(alertMessage.textContent).toContain('Translation to Japanese failed. Please try again.');
+      expect(alertMessage.classList.contains('show')).toBe(true);
+    });
+  });
+
   test('mode switch persists v1 without starting analysis for the current selection', async () => {
     const text = '成長を後押しする';
     const context = { before: '制度が', after: 'という。' };

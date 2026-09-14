@@ -59,9 +59,13 @@ class JaAlchemyApiService {
    * @param {function} onChunk - Callback invoked with each text chunk
    * @param {function} onDone - Callback invoked with the full accumulated text after callable success
    * @param {function} onError - Callback invoked with an error message on failure
-   * @param {{ signal?: AbortSignal }} [options] - cancellation options for the callable request
+   * @param {{ signal?: AbortSignal, onStatus?: (status: string) => void }} [options] - cancellation
+   *   options for the callable request. `onStatus` (P8-B) is invoked for a non-content status marker
+   *   the callable can send ahead of analysis (currently only "translating", emitted once when
+   *   non-Japanese source text is being translated before analysis begins) — it never fires for the
+   *   Japanese fast path.
    */
-  async generateResponseStream(selectedText, promptVersion, context, onChunk, onDone, onError, { signal } = {}) {
+  async generateResponseStream(selectedText, promptVersion, context, onChunk, onDone, onError, { signal, onStatus } = {}) {
     let fullText = '';
     try {
       if (signal?.aborted) {
@@ -85,6 +89,13 @@ class JaAlchemyApiService {
       for await (const chunk of stream) {
         if (signal?.aborted) {
           return;
+        }
+        // P8-B: a status marker (currently only "translating") carries no
+        // analysis content — surface it via onStatus, then fall through to
+        // the empty-content check below so it is never appended/rendered as
+        // analysis text.
+        if (chunk?.status) {
+          onStatus?.(chunk.status);
         }
         if (!chunk?.content) continue;
         console.log('[Firebase API] Received chunk:', chunk.content);

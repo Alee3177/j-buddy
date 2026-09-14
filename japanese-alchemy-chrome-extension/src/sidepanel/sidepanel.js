@@ -905,7 +905,20 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         activeAnalysisPreviewText = '';
                         setCompletedAnalysisAvailable(false);
                     },
-                    { signal: analysisController.signal }
+                    {
+                        signal: analysisController.signal,
+                        // P8-B: one-shot status the callable sends before translating
+                        // non-Japanese source text — never fires on the Japanese
+                        // fast path. The first real analysis chunk's onChunk above
+                        // already overwrites this loading message, so no separate
+                        // "clear" step is needed.
+                        onStatus: (status) => {
+                            if (!isLatestAnalysis(requestId)) return;
+                            if (status === 'translating') {
+                                setLoadingMessage(loadingElement, '「日本語に変換しています…」');
+                            }
+                        },
+                    }
                 );
             } catch (apiError) {
                 if (!isLatestAnalysis(requestId)) return;
