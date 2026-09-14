@@ -3,6 +3,7 @@ import { SaveItemsRequest, SaveItemsResponse } from "../models/types";
 import { FirestoreService } from "../services/firestoreService";
 import { deriveLearningItems } from "../models/learningItem";
 import { logger } from "../utils/logger";
+import { validateSaveItemsCounts } from "./requestValidation";
 
 export async function saveItemsHandler(request: any): Promise<SaveItemsResponse> {
   logger.setContext(request);
@@ -21,6 +22,19 @@ export async function saveItemsHandler(request: any): Promise<SaveItemsResponse>
    const words = analysis.words || [];
    const grammars = analysis.grammars || [];
     const page = analysis.page;
+
+  // P7.4 — reject an oversized item count before any Firestore write is
+  // attempted (see requestValidation.ts for why).
+  const countValidation = validateSaveItemsCounts(words, grammars);
+  if (!countValidation.ok) {
+    logger.warn(
+      `Rejected oversized saveItems request: words=${words.length} grammars=${grammars.length}`
+    );
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      countValidation.error ?? "Invalid request"
+    );
+  }
    // v0.4 P1: a save is "shared" ONLY when the client explicitly sets
    // is_shared === true. Anything else is a personal save and is auth-gated
    // below — a malformed / spoofed is_shared can no longer route a personal

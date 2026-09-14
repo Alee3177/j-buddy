@@ -2,9 +2,11 @@ import { describe, it, expect } from "@jest/globals";
 import {
   validateExplainRequest,
   isBodyTooLarge,
+  validateSaveItemsCounts,
   MAX_CONTENT_LENGTH,
   MIN_CONTENT_LENGTH,
   MAX_REQUEST_BYTES,
+  MAX_SAVE_ITEMS_COUNT,
 } from "../../src/v1/requestValidation";
 import { MAX_CONTEXT_CHARS } from "../../src/models/analysisMessage";
 
@@ -109,5 +111,31 @@ describe("isBodyTooLarge", () => {
 
   it("accepts an absent content-length", () => {
     expect(isBodyTooLarge(req(undefined))).toBe(false);
+  });
+});
+
+// P7.4 — saveItems item-count guard (see requestValidation.ts for rationale).
+describe("validateSaveItemsCounts", () => {
+  const arrayOf = (n: number) => Array.from({ length: n }, () => ({}));
+
+  it("accepts empty arrays", () => {
+    expect(validateSaveItemsCounts([], []).ok).toBe(true);
+  });
+
+  it("accepts exactly the maximum count", () => {
+    expect(validateSaveItemsCounts(arrayOf(MAX_SAVE_ITEMS_COUNT), []).ok).toBe(true);
+    expect(validateSaveItemsCounts([], arrayOf(MAX_SAVE_ITEMS_COUNT)).ok).toBe(true);
+  });
+
+  it("rejects a words array over the maximum", () => {
+    const result = validateSaveItemsCounts(arrayOf(MAX_SAVE_ITEMS_COUNT + 1), []);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
+  });
+
+  it("rejects a grammars array over the maximum", () => {
+    const result = validateSaveItemsCounts([], arrayOf(MAX_SAVE_ITEMS_COUNT + 1));
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(400);
   });
 });

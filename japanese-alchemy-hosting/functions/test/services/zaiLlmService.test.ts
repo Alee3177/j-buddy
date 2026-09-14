@@ -50,4 +50,39 @@ describe("ZaiLlmService", () => {
     expect(payload).toEqual(expect.objectContaining({ stream: true }));
     expect(payload.stream_options).toBeUndefined();
   });
+
+  // P7.4 — same secret-leakage guard as GeminiLlmService: the client-visible
+  // error must never leak the API key or the raw upstream error body.
+  it("never leaks the API key or the raw upstream error body in the thrown error message", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      text: async () => "Invalid Authorization header: Bearer zai-key",
+    });
+
+    expect.assertions(2);
+    try {
+      await service.chatCompletion("system", "content");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain("zai-key");
+      expect(message).not.toContain("Invalid Authorization header");
+    }
+  });
+
+  it("never includes API config fields on a successful response", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: "GLM-5.3-Flash",
+        choices: [{ finish_reason: "stop", message: { content: "answer" } }],
+      }),
+    });
+
+    const result = await service.chatCompletion("system", "content");
+
+    expect(Object.keys(result.response).sort()).toEqual(["data", "success", "timestamp"]);
+    expect(JSON.stringify(result)).not.toContain("zai-key");
+  });
 });

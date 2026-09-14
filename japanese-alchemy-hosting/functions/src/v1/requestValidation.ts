@@ -92,3 +92,27 @@ export function isParsedBodyTooLarge(body: unknown): boolean {
     return false;
   }
 }
+
+// P7.4 — saveItems is auth-gated but, unlike explain, had no ceiling on how
+// many vocab/grammar items a single save could contain. `saveVocabulary` /
+// `saveGrammar` each commit one Firestore batch (a hard 500-write limit) per
+// array, so an oversized array previously surfaced as an unhandled Firestore
+// "too many writes" error instead of a clean rejection. A legitimate save is
+// derived from a single ≤500-character `explain` analysis (MAX_CONTENT_LENGTH
+// above), which realistically yields well under a hundred items — 200 is a
+// generous ceiling that stays safely under Firestore's 500-write batch limit.
+export const MAX_SAVE_ITEMS_COUNT = 200;
+
+export function validateSaveItemsCounts(
+  words: unknown[],
+  grammars: unknown[]
+): ValidationResult {
+  if (words.length > MAX_SAVE_ITEMS_COUNT || grammars.length > MAX_SAVE_ITEMS_COUNT) {
+    return {
+      ok: false,
+      status: 400,
+      error: `A single save cannot exceed ${MAX_SAVE_ITEMS_COUNT} words or ${MAX_SAVE_ITEMS_COUNT} grammar points`,
+    };
+  }
+  return { ok: true, status: 200 };
+}

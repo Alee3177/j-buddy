@@ -147,6 +147,39 @@ describe("GeminiLlmService", () => {
       ).rejects.toThrow("Gemini API error: 500 Internal Server Error");
     });
 
+    // P7.4 — the client-visible HttpsError message must never leak the API
+    // key (or the raw upstream error body, which could itself echo request
+    // details) even when the upstream response body tries to include it.
+    it("never leaks the API key or the raw upstream error body in the thrown error message", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        text: async () => "Invalid Authorization header: Bearer test-api-key",
+      });
+
+      expect.assertions(2);
+      try {
+        await service.chatCompletion(mockSystemPrompt, mockContent);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).not.toContain("test-api-key");
+        expect(message).not.toContain("Invalid Authorization header");
+      }
+    });
+
+    it("never includes API config fields on a successful response", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await service.chatCompletion(mockSystemPrompt, mockContent);
+
+      expect(Object.keys(result.response).sort()).toEqual(["data", "success", "timestamp"]);
+      expect(JSON.stringify(result)).not.toContain("test-api-key");
+    });
+
     it("should include timestamp in response", async () => {
       const beforeCall = Date.now();
 

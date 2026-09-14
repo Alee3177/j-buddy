@@ -150,6 +150,51 @@ describe("saveItemsHandler — auth hardening (personal saves)", () => {
   });
 });
 
+// P7.4 — saveItems is auth-gated but had no ceiling on item counts, unlike
+// explain's strict input validation. An oversized array would previously hit
+// Firestore's 500-write batch limit as an unhandled internal error instead of
+// a clean rejection. See requestValidation.ts (MAX_SAVE_ITEMS_COUNT).
+describe("saveItemsHandler — P7.4 item-count guard", () => {
+  it("rejects an oversized words array (personal save) and writes nothing", async () => {
+    const words = Array.from({ length: 201 }, (_, i) => ({ term: `word-${i}` }));
+    await expect(
+      callHandler(
+        { analysis: { words, grammars: [], page: PAGE, metadata: META } },
+        "alice"
+      )
+    ).rejects.toMatchObject({ code: "invalid-argument" });
+    noWrites();
+  });
+
+  it("rejects an oversized grammars array (personal save) and writes nothing", async () => {
+    const grammars = Array.from({ length: 201 }, (_, i) => ({ point: `g-${i}` }));
+    await expect(
+      callHandler(
+        { analysis: { words: [], grammars, page: PAGE, metadata: META } },
+        "alice"
+      )
+    ).rejects.toMatchObject({ code: "invalid-argument" });
+    noWrites();
+  });
+
+  it("rejects an oversized array on a shared save too (guard runs before the shared/personal branch)", async () => {
+    const words = Array.from({ length: 201 }, (_, i) => ({ term: `word-${i}` }));
+    await expect(
+      callHandler({ analysis: { is_shared: true, words, grammars: [], page: PAGE, metadata: META } })
+    ).rejects.toMatchObject({ code: "invalid-argument" });
+    noWrites();
+  });
+
+  it("accepts exactly the maximum allowed count", async () => {
+    const words = Array.from({ length: 200 }, (_, i) => ({ term: `word-${i}` }));
+    const res = await callHandler(
+      { analysis: { words, grammars: [], page: PAGE, metadata: META } },
+      "alice"
+    );
+    expect(res.success).toBe(true);
+  });
+});
+
 describe("saveItemsHandler — learning item derivation wiring", () => {
   it("6/7. calls savePersonalAnalysisPage exactly once and reports page_saved from its result", async () => {
     const res = await callHandler({ userId: "u", analysis: { page: PAGE, metadata: META } }, "u");
