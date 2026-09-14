@@ -3,6 +3,7 @@ import { explainHandler } from "../../src/v1/explainCallable";
 import { checkRateLimit } from "../../src/v1/rateLimiter";
 import { SYSTEM_PROMPT_V1 } from "../../src/models/systemPromptV1";
 import { SYSTEM_PROMPT_V2 } from "../../src/models/systemPromptV2";
+import { TRANSLATION_SYSTEM_PROMPT } from "../../src/models/translationPrompt";
 
 // `mock`-prefixed vars are the one exception jest allows inside a mock factory.
 // Cast as any: jest.fn() infers `never` under this global jest typing, which
@@ -94,5 +95,71 @@ describe("explainHandler", () => {
     expect(message).toContain("【前文】前文");
     expect(message).toContain("【分析対象】テストです");
     expect(message).toContain("【後文】後文");
+  });
+
+  describe("P8-B multilingual pre-stage", () => {
+    it("bypasses translation for Japanese input (single LLM call)", async () => {
+      await explainHandler({ data: { content: "テストです" } } as any);
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+      expect(mockChatCompletion).toHaveBeenCalledWith(SYSTEM_PROMPT_V2, "テストです");
+    });
+
+    it("translates Chinese input before analysis", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler({ data: { content: "这是一个测试" } } as any);
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      expect(mockChatCompletion.mock.calls[0]).toEqual([TRANSLATION_SYSTEM_PROMPT, "这是一个测试"]);
+      expect(mockChatCompletion.mock.calls[1][1]).toBe("これはテストです");
+    });
+
+    it("translates English input before analysis", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "こんにちは" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler({ data: { content: "Hello there, how are you" } } as any);
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      expect(mockChatCompletion.mock.calls[0]).toEqual([TRANSLATION_SYSTEM_PROMPT, "Hello there, how are you"]);
+      expect(mockChatCompletion.mock.calls[1][1]).toBe("こんにちは");
+    });
+
+    it("fails loudly with a clean error when translation fails, without calling the analysis LLM", async () => {
+      mockChatCompletion.mockRejectedValueOnce(new Error("provider unavailable"));
+
+      await expect(
+        explainHandler({ data: { content: "这是一个测试" } } as any)
+      ).rejects.toMatchObject({ code: "internal", message: expect.stringMatching(/translation/i) });
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects unsupported/unknown language cleanly without calling the LLM", async () => {
+      await expect(
+        explainHandler({ data: { content: "안녕하세요 테스트입니다" } } as any)
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("benchmark #001: Chinese product title is translated before analysis instead of producing empty analysis", async () => {
+      const source = "美國 Prismacolor Premier 霹靂馬色鉛筆/油性（單支）\n#103~#997 單色下標區";
+      const translated = "米国Prismacolor Premier（プリズマカラー・プレミア）\n油性色鉛筆・単色\n#103～#997 各色から選択可能";
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: translated } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler({ data: { content: source } } as any);
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      const [, analysisMessage] = mockChatCompletion.mock.calls[1];
+      expect(analysisMessage).toBe(translated);
+      expect(analysisMessage).not.toBe(source);
+    });
   });
 });

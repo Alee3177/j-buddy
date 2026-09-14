@@ -9,9 +9,21 @@ import { logger } from "../utils/logger";
 import { isParsedBodyTooLarge, validateExplainRequest } from "./requestValidation";
 import { checkRateLimit, rateLimitKey } from "./rateLimiter";
 import { consumeLlmStream } from "./llmStreamDeltas";
+import {
+  runMultilingualPreStage,
+  TranslationFailedError,
+  UnsupportedLanguageError,
+} from "./multilingualPreStage";
+import { detectLanguage } from "../services/languageDetection";
 
 interface StreamChunk {
   content: string;
+  // P8-B: a one-shot, empty-content status marker sent immediately when
+  // non-Japanese source text is detected, before translation begins. `content`
+  // stays "" so a client that only does `fullText += chunk.content` (today's
+  // extension) is unaffected — reading `status` for a UI treatment is a
+  // forward-compatible follow-up, not required by this phase.
+  status?: "translating";
 }
 
 interface CallableStreamResult {
@@ -65,9 +77,32 @@ export async function explainStreamCallableHandler(
 
   try {
     const llmService = createLlmService("gemini");
+
+    // P8-B: cheap precheck (same detectLanguage the shared pre-stage below
+    // uses internally) so a one-shot "translating" status chunk can go out
+    // to the client before the translation call's latency is incurred. Only
+    // fires when translation will actually be attempted (zh/en) — never for
+    // Japanese (preserving today's latency/behavior) and never for an
+    // unsupported/unknown language, which fails immediately below instead.
+    const precheckLanguage = detectLanguage(content);
+    if (
+      (precheckLanguage === "zh" || precheckLanguage === "en") &&
+      request.acceptsStreaming &&
+      response
+    ) {
+      await response.sendChunk({ content: "", status: "translating" });
+    }
+
+    // Routes non-Japanese source text through translation before the
+    // existing (unmodified) Japanese Analyzer runs. Shared with
+    // explainHandler so detection/translation logic lives in exactly one
+    // place. Translation itself is never streamed — it must fully complete
+    // before analysis streaming begins.
+    const preStage = await runMultilingualPreStage(content, llmService);
+
     const completion = await llmService.streamCompletion(
       systemPrompt,
-      buildAnalysisMessage(content, { before: context_before, after: context_after })
+      buildAnalysisMessage(preStage.analysisContent, { before: context_before, after: context_after })
     );
 
     const streamResult = await consumeLlmStream(completion.response, async (delta) => {
@@ -88,6 +123,19 @@ export async function explainStreamCallableHandler(
 
     return { success: true };
   } catch (error) {
+    if (error instanceof UnsupportedLanguageError) {
+      logger.warn(`Rejected unsupported source language: ${error.detectedLanguage}`, {
+        client: clientTag(request.rawRequest.ip),
+      });
+      return {
+        success: false,
+        error: "Unsupported source language. J-Buddy currently supports Japanese, Chinese, and English source text.",
+      };
+    }
+    if (error instanceof TranslationFailedError) {
+      logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);
+      return { success: false, error: "Translation to Japanese failed. Please try again." };
+    }
     logger.error("Error in callable streaming explain", error);
     return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
   }

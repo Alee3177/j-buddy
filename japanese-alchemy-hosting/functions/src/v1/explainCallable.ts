@@ -8,6 +8,11 @@ import { logLlmUsageTelemetry } from "../services/llmUsageTelemetry";
 import { logger } from "../utils/logger";
 import { validateExplainRequest } from "./requestValidation";
 import { checkRateLimit } from "./rateLimiter";
+import {
+  runMultilingualPreStage,
+  TranslationFailedError,
+  UnsupportedLanguageError,
+} from "./multilingualPreStage";
 
 export async function explainHandler(request: any): Promise<SuccessResponse> {
   logger.setContext(request);
@@ -46,9 +51,16 @@ export async function explainHandler(request: any): Promise<SuccessResponse> {
 
   try {
     const llmService = createLlmService("gemini");
+
+    // P8-B: routes non-Japanese source text through translation before the
+    // existing (unmodified) Japanese Analyzer runs. Shared with
+    // explainStreamCallableHandler so detection/translation logic lives in
+    // exactly one place.
+    const preStage = await runMultilingualPreStage(content, llmService);
+
     const completion = await llmService.chatCompletion(
       systemPrompt,
-      buildAnalysisMessage(content, { before: context_before, after: context_after })
+      buildAnalysisMessage(preStage.analysisContent, { before: context_before, after: context_after })
     );
 
     logLlmUsageTelemetry({
@@ -63,6 +75,20 @@ export async function explainHandler(request: any): Promise<SuccessResponse> {
     logger.info("Explain request completed successfully");
     return completion.response;
   } catch (error) {
+    if (error instanceof UnsupportedLanguageError) {
+      logger.warn(`Rejected unsupported source language: ${error.detectedLanguage}`);
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Unsupported source language. J-Buddy currently supports Japanese, Chinese, and English source text."
+      );
+    }
+    if (error instanceof TranslationFailedError) {
+      logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);
+      throw new functions.https.HttpsError(
+        "internal",
+        "Translation to Japanese failed. Please try again."
+      );
+    }
     logger.error("Error in explain callable", error);
     throw new functions.https.HttpsError(
       "internal",
