@@ -48,16 +48,41 @@ const timestampToDate = (timestamp: Timestamp | Date | number): Date => {
 };
 
 /**
- * P7.3-I — live variant of the (now-removed) one-shot `getUserVocabularies` /
- * `getUserGrammars` / `getUserAnalysisPages`. All three personal subcollections
- * share the same shape (owner-scoped, ordered by createdAt desc, no
- * pagination), so the subscription plumbing is shared here and each caller
- * below only supplies the subcollection name and the doc→entity mapping.
- *
- * `onData` fires with the full current list on the initial snapshot AND again
- * on every subsequent Firestore change (e.g. a Chrome-extension save), so an
- * open webapp reflects external writes without a reload.
+ * P7.3-I — personal vocab/grammar/analysis-page subcollections all share the
+ * same shape (owner-scoped, ordered by createdAt desc, no pagination), so the
+ * query construction and doc→entity mapping are defined once per collection
+ * here and reused by BOTH the live `onSnapshot` variant (primary realtime
+ * mechanism) and the one-shot `getDocs` variant (the focus/visibility
+ * fallback read — see `lib/focusRefresh.ts` — for when the live Listen
+ * transport doesn't deliver an update while the tab is away).
  */
+const mapVocabulary = (id: string, data: Record<string, unknown>): Vocabulary =>
+  ({
+    id,
+    ...data,
+    createdAt: timestampToDate(data.createdAt as Timestamp),
+  }) as Vocabulary;
+
+const mapGrammar = (id: string, data: Record<string, unknown>): Grammar =>
+  ({
+    id,
+    ...data,
+    createdAt: timestampToDate(data.createdAt as Timestamp),
+  }) as Grammar;
+
+const mapAnalysisPage = (id: string, data: Record<string, unknown>): AnalysisPage =>
+  ({
+    id,
+    ...data,
+    createdAt: timestampToDate(data.createdAt as Timestamp),
+  }) as AnalysisPage;
+
+function userSubcollectionQuery(db: Firestore, userId: string, subcollectionName: string) {
+  const userDocRef = doc(db, 'users', userId);
+  return query(collection(userDocRef, subcollectionName), orderBy('createdAt', 'desc'));
+}
+
+/** `onData` fires on the initial snapshot AND again on every subsequent Firestore change. */
 function subscribeToUserSubcollection<T>(
   userId: string,
   subcollectionName: string,
@@ -65,13 +90,7 @@ function subscribeToUserSubcollection<T>(
   onData: (items: T[]) => void,
   onError: (error: unknown) => void
 ): Unsubscribe {
-  const db = requireDb();
-  const userDocRef = doc(db, 'users', userId);
-  const q = query(
-    collection(userDocRef, subcollectionName),
-    orderBy('createdAt', 'desc')
-  );
-
+  const q = userSubcollectionQuery(requireDb(), userId, subcollectionName);
   return onSnapshot(
     q,
     (snapshot) => {
@@ -79,6 +98,17 @@ function subscribeToUserSubcollection<T>(
     },
     onError
   );
+}
+
+/** One-shot read of the same query `subscribeToUserSubcollection` watches. */
+async function getUserSubcollection<T>(
+  userId: string,
+  subcollectionName: string,
+  mapDoc: (id: string, data: Record<string, unknown>) => T
+): Promise<T[]> {
+  const q = userSubcollectionQuery(requireDb(), userId, subcollectionName);
+  const querySnapshot = await getDocs(q);
+  return querySnapshot.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>));
 }
 
 export function subscribeToUserVocabularies(
@@ -89,12 +119,7 @@ export function subscribeToUserVocabularies(
   return subscribeToUserSubcollection<Vocabulary>(
     userId,
     VOCABULARIES_SUBCOLLECTION,
-    (id, data) =>
-      ({
-        id,
-        ...data,
-        createdAt: timestampToDate(data.createdAt as Timestamp),
-      }) as Vocabulary,
+    mapVocabulary,
     onData,
     onError
   );
@@ -108,12 +133,7 @@ export function subscribeToUserGrammars(
   return subscribeToUserSubcollection<Grammar>(
     userId,
     GRAMMARS_SUBCOLLECTION,
-    (id, data) =>
-      ({
-        id,
-        ...data,
-        createdAt: timestampToDate(data.createdAt as Timestamp),
-      }) as Grammar,
+    mapGrammar,
     onData,
     onError
   );
@@ -127,15 +147,23 @@ export function subscribeToUserAnalysisPages(
   return subscribeToUserSubcollection<AnalysisPage>(
     userId,
     ANALYSIS_PAGES_SUBCOLLECTION,
-    (id, data) =>
-      ({
-        id,
-        ...data,
-        createdAt: timestampToDate(data.createdAt as Timestamp),
-      }) as AnalysisPage,
+    mapAnalysisPage,
     onData,
     onError
   );
+}
+
+/** P7.3-I hybrid-fallback one-shot reads — used only by `lib/focusRefresh.ts`-driven refreshes. */
+export function getUserVocabularies(userId: string): Promise<Vocabulary[]> {
+  return getUserSubcollection<Vocabulary>(userId, VOCABULARIES_SUBCOLLECTION, mapVocabulary);
+}
+
+export function getUserGrammars(userId: string): Promise<Grammar[]> {
+  return getUserSubcollection<Grammar>(userId, GRAMMARS_SUBCOLLECTION, mapGrammar);
+}
+
+export function getUserAnalysisPages(userId: string): Promise<AnalysisPage[]> {
+  return getUserSubcollection<AnalysisPage>(userId, ANALYSIS_PAGES_SUBCOLLECTION, mapAnalysisPage);
 }
 
 export async function deleteAnalysisPage(userId: string, pageId: string): Promise<void> {

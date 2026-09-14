@@ -39,13 +39,19 @@ function stubSubscriber() {
 
 function mountFeed(
   subscribe: ReturnType<typeof stubSubscriber>['subscribe'],
-  initial: { uid: string | null; authResolved: boolean }
+  initial: { uid: string | null; authResolved: boolean },
+  refetchOnFocus?: (uid: string) => Promise<Row[]>
 ) {
   const sink = { current: null as Row[] | null };
   let props = initial;
 
   function Probe() {
-    sink.current = useUserCollectionFeed<Row>(props.uid, props.authResolved, subscribe);
+    sink.current = useUserCollectionFeed<Row>(
+      props.uid,
+      props.authResolved,
+      subscribe,
+      refetchOnFocus
+    );
     return null;
   }
 
@@ -207,6 +213,137 @@ describe('useUserCollectionFeed', () => {
     expect(feed.items()).toEqual([]);
     expect(subscribe).toHaveBeenCalledTimes(1);
 
+    feed.unmount();
+  });
+});
+
+// P7.3-I hybrid fallback — focus/visibility one-shot refresh layered on top
+// of the live subscription above.
+describe('useUserCollectionFeed focus/visibility fallback', () => {
+  it('applies a fresh one-shot read when the window regains focus', async () => {
+    const { subscribe, subs } = stubSubscriber();
+    const refetchOnFocus = vi.fn(async () => [{ id: 'a' }, { id: 'b' }]);
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }, refetchOnFocus);
+    await feed.mount();
+    await act(async () => {
+      subs[0].emit([{ id: 'a' }]);
+    });
+    expect(feed.items()).toHaveLength(1);
+
+    // No onSnapshot emission arrives — only the fallback fires.
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(refetchOnFocus).toHaveBeenCalledWith('u1');
+    expect(feed.items()).toEqual([{ id: 'a' }, { id: 'b' }]);
+    // onSnapshot itself was never re-subscribed for this.
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    feed.unmount();
+  });
+
+  it('does nothing on hidden visibilitychange', async () => {
+    const { subscribe } = stubSubscriber();
+    const refetchOnFocus = vi.fn(async () => [{ id: 'a' }]);
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }, refetchOnFocus);
+    await feed.mount();
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(refetchOnFocus).not.toHaveBeenCalled();
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    feed.unmount();
+  });
+
+  it('does nothing when signed out', async () => {
+    const { subscribe } = stubSubscriber();
+    const refetchOnFocus = vi.fn(async () => [{ id: 'a' }]);
+    const feed = mountFeed(subscribe, { uid: null, authResolved: true }, refetchOnFocus);
+    await feed.mount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(refetchOnFocus).not.toHaveBeenCalled();
+    feed.unmount();
+  });
+
+  it('dedupes focus + visibilitychange firing together into one read', async () => {
+    const { subscribe } = stubSubscriber();
+    let resolveFetch!: (items: Row[]) => void;
+    const refetchOnFocus = vi.fn(
+      () => new Promise<Row[]>((resolve) => { resolveFetch = resolve; })
+    );
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }, refetchOnFocus);
+    await feed.mount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(refetchOnFocus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveFetch([{ id: 'a' }]);
+    });
+
+    feed.unmount();
+  });
+
+  it('removes the focus/visibility listeners on unmount', async () => {
+    const { subscribe } = stubSubscriber();
+    const refetchOnFocus = vi.fn(async () => [{ id: 'a' }]);
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }, refetchOnFocus);
+    await feed.mount();
+    feed.unmount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(refetchOnFocus).not.toHaveBeenCalled();
+  });
+
+  it('keeps last-known-good data when the fallback read fails', async () => {
+    const { subscribe, subs } = stubSubscriber();
+    const refetchOnFocus = vi.fn(async () => {
+      throw new Error('network blip');
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }, refetchOnFocus);
+    await feed.mount();
+    await act(async () => {
+      subs[0].emit([{ id: 'a' }]);
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(feed.items()).toEqual([{ id: 'a' }]);
+    consoleError.mockRestore();
+    feed.unmount();
+  });
+
+  it('does not attach focus/visibility listeners when no refetchOnFocus is provided', async () => {
+    const { subscribe } = stubSubscriber();
+    const feed = mountFeed(subscribe, { uid: 'u1', authResolved: true }); // no 4th arg
+    await feed.mount();
+
+    // Nothing to assert on directly other than: no crash and subscribe still
+    // fires once — the fallback simply isn't wired when unused.
+    expect(subscribe).toHaveBeenCalledTimes(1);
     feed.unmount();
   });
 });

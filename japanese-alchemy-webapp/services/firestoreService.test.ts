@@ -32,6 +32,9 @@ import {
   subscribeToUserVocabularies,
   subscribeToUserGrammars,
   subscribeToUserAnalysisPages,
+  getUserVocabularies,
+  getUserGrammars,
+  getUserAnalysisPages,
   encodeLearningItemsCursor,
   decodeLearningItemsCursor,
 } from './firestoreService';
@@ -724,5 +727,69 @@ describe.each([
     result();
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+// P7.3-I hybrid fallback — restored one-shot readers, used only by the
+// focus/visibility fallback (lib/focusRefresh.ts), watching the exact same
+// query as the corresponding subscribeToUser* above.
+describe.each([
+  {
+    label: 'vocabularies',
+    getUser: getUserVocabularies,
+    subcollection: 'vocabularies',
+  },
+  {
+    label: 'grammars',
+    getUser: getUserGrammars,
+    subcollection: 'grammars',
+  },
+  {
+    label: 'analysis pages',
+    getUser: getUserAnalysisPages,
+    subcollection: 'analysis_pages',
+  },
+])('getUser$label', ({ getUser, subcollection }) => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    firestore.doc.mockImplementation((...segments: unknown[]) => ({
+      path: segments.slice(1).join('/'),
+    }));
+    firestore.collection.mockImplementation((...segments: unknown[]) => ({ segments }));
+    firestore.query.mockImplementation((...parts: unknown[]) => ({ parts }));
+    firestore.orderBy.mockReturnValue({ order: 'createdAt' });
+  });
+
+  it(`reads users/{userId}/${subcollection} ordered by createdAt desc, once`, async () => {
+    firestore.getDocs.mockResolvedValue({ docs: [] });
+
+    await getUser('alice');
+
+    expect(firestore.doc).toHaveBeenCalledWith({ name: 'db' }, 'users', 'alice');
+    expect(firestore.collection).toHaveBeenCalledWith({ path: 'users/alice' }, subcollection);
+    expect(firestore.orderBy).toHaveBeenCalledWith('createdAt', 'desc');
+    expect(firestore.getDocs).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps docs to entities', async () => {
+    firestore.getDocs.mockResolvedValue({
+      docs: [
+        { id: 'x', data: () => ({ createdAt: 1 }) },
+        { id: 'y', data: () => ({ createdAt: 2 }) },
+      ],
+    });
+
+    const result = await getUser('alice');
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'x' }),
+      expect.objectContaining({ id: 'y' }),
+    ]);
+  });
+
+  it('propagates a Firestore read failure to the caller', async () => {
+    firestore.getDocs.mockRejectedValue(new Error('firestore unavailable'));
+
+    await expect(getUser('alice')).rejects.toThrow('firestore unavailable');
   });
 });

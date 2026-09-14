@@ -5,6 +5,7 @@ import {
   learningItemsFeedReducer,
   startFirstPageFeed,
   runNextPage,
+  runFocusRefresh,
   type LearningItemsFeedState,
 } from './learningItemsFeed';
 import type { LearningItem, ListLearningItemsResult } from '@/types';
@@ -238,5 +239,57 @@ describe('runNextPage', () => {
       'NEXT_PAGE_PENDING',
       'NEXT_PAGE_FAILED',
     ]);
+  });
+});
+
+// P7.3-I hybrid fallback — one-shot first-page re-fetch driven by
+// window focus / visibilitychange (lib/focusRefresh.ts), never a timer.
+describe('runFocusRefresh', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('dispatches FIRST_PAGE_OK directly (no PENDING) on success', async () => {
+    const dispatch = vi.fn();
+    const result = page([item({ id: 'a' }), item({ id: 'b' })], null);
+
+    await runFocusRefresh(dispatch, () => true, async () => result);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'FIRST_PAGE_OK', result });
+  });
+
+  it('swallows a fetch failure and keeps the last-known-good state (no FAILED dispatch)', async () => {
+    const dispatch = vi.fn();
+
+    await runFocusRefresh(dispatch, () => true, async () => {
+      throw new Error('network blip');
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('discards a result that resolves after the generation changed', async () => {
+    const dispatch = vi.fn();
+    let current = true;
+
+    await runFocusRefresh(
+      dispatch,
+      () => current,
+      async () => {
+        current = false; // simulate a user switch mid-flight
+        return page([item()], null);
+      }
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when already stale before it starts', async () => {
+    const dispatch = vi.fn();
+    const fetchFirstPage = vi.fn();
+
+    await runFocusRefresh(dispatch, () => false, fetchFirstPage);
+
+    expect(fetchFirstPage).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

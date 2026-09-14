@@ -356,3 +356,91 @@ describe('useLearningItemsFeed', () => {
     feed.unmount();
   });
 });
+
+// P7.3-I hybrid fallback — focus/visibility one-shot first-page re-fetch,
+// layered on top of the live subscription above.
+describe('useLearningItemsFeed focus/visibility fallback', () => {
+  it('re-fetches the first page on window focus when no onSnapshot emission arrives', async () => {
+    const subs = stubSubscriptions();
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+    await act(async () => {
+      subs[0].emit(pageResult(['l1', 'l2'], null));
+    });
+    expect(feed.state().items).toHaveLength(2);
+
+    listLearningItems.mockResolvedValueOnce(pageResult(['l3', 'l4', 'l1', 'l2'], null));
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(listLearningItems).toHaveBeenCalledWith();
+    expect(feed.state().items.map((i) => i.id)).toEqual(['l3', 'l4', 'l1', 'l2']);
+    // The live listener itself was never re-subscribed for this.
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
+
+    feed.unmount();
+  });
+
+  it('does nothing on hidden visibilitychange or after unmount', async () => {
+    stubSubscriptions();
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(listLearningItems).not.toHaveBeenCalled();
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+
+    feed.unmount();
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listLearningItems).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when signed out', async () => {
+    stubSubscriptions();
+    const feed = mountFeed({ uid: null, authResolved: true });
+    await feed.mount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(listLearningItems).not.toHaveBeenCalled();
+    feed.unmount();
+  });
+
+  it('dedupes focus + visibilitychange firing together into one re-fetch', async () => {
+    stubSubscriptions();
+    const feed = mountFeed({ uid: 'u1', authResolved: true });
+    await feed.mount();
+
+    let resolveFetch!: (r: ListLearningItemsResult) => void;
+    listLearningItems.mockReturnValueOnce(
+      new Promise<ListLearningItemsResult>((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(listLearningItems).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveFetch(pageResult(['l1'], null));
+    });
+
+    feed.unmount();
+  });
+});

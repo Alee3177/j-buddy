@@ -44,10 +44,15 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+const authMock = vi.hoisted(() => ({
+  user: { uid: 'u1', email: 'user@example.com' } as { uid: string; email: string } | null,
+  loading: false,
+}));
+
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
-    user: { uid: 'u1', email: 'user@example.com' },
-    loading: false,
+    user: authMock.user,
+    loading: authMock.loading,
     signOut: vi.fn(),
     signIn: vi.fn(),
     signUp: vi.fn(),
@@ -96,6 +101,11 @@ const getSharedVocabularies = vi.fn(async () => []);
 const getSharedGrammars = vi.fn(async () => []);
 const deleteAnalysisPage = vi.fn(async () => {});
 const listLearningItems = vi.fn();
+// P7.3-I hybrid fallback — one-shot readers used only by the focus/visibility
+// fallback (lib/focusRefresh.ts), never by the primary onSnapshot path.
+const getUserVocabularies = vi.fn(async (_uid: string) => [] as Vocabulary[]);
+const getUserGrammars = vi.fn(async (_uid: string) => [] as Grammar[]);
+const getUserAnalysisPages = vi.fn(async (_uid: string) => [] as AnalysisPage[]);
 
 vi.mock('@/services/firestoreService', () => ({
   subscribeToUserVocabularies: (...args: Parameters<typeof vocabSub.subscribe>) =>
@@ -107,6 +117,11 @@ vi.mock('@/services/firestoreService', () => ({
   subscribeToLearningItems: (...args: Parameters<typeof subscribeToLearningItems>) =>
     subscribeToLearningItems(...args),
   listLearningItems: (...args: unknown[]) => listLearningItems(...args),
+  getUserVocabularies: (...args: Parameters<typeof getUserVocabularies>) =>
+    getUserVocabularies(...args),
+  getUserGrammars: (...args: Parameters<typeof getUserGrammars>) => getUserGrammars(...args),
+  getUserAnalysisPages: (...args: Parameters<typeof getUserAnalysisPages>) =>
+    getUserAnalysisPages(...args),
   deleteAnalysisPage: (...args: Parameters<typeof deleteAnalysisPage>) =>
     deleteAnalysisPage(...args),
   getSharedAnalysisPages: () => getSharedAnalysisPages(),
@@ -201,6 +216,8 @@ function tabCounts(container: HTMLElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authMock.user = { uid: 'u1', email: 'user@example.com' };
+  authMock.loading = false;
   vocabSub.subs.length = 0;
   grammarSub.subs.length = 0;
   pagesSub.subs.length = 0;
@@ -208,14 +225,39 @@ beforeEach(() => {
   getSharedAnalysisPages.mockResolvedValue([]);
   getSharedVocabularies.mockResolvedValue([]);
   getSharedGrammars.mockResolvedValue([]);
+  getUserVocabularies.mockResolvedValue([]);
+  getUserGrammars.mockResolvedValue([]);
+  getUserAnalysisPages.mockResolvedValue([]);
+  listLearningItems.mockResolvedValue({ items: [], nextCursor: null });
   listDueReviewCards.mockResolvedValue({ cards: [] });
   listReviewCardKeys.mockResolvedValue(new Set<string>());
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => 'visible',
+  });
 });
 
 describe('Dashboard external-write live refresh (P7.3-I)', () => {
-  it('updates 單字/文法/頁面/學習項目 counts live (1/1/1/2 -> 2/2/2/4) with no reload, remount, or auth change', async () => {
+  // P7.3-I production live-retest regression: the deployed bundle was
+  // confirmed byte-for-byte correct and this exact React lifecycle was
+  // confirmed (via temporary local console instrumentation, since removed) to
+  // subscribe once, apply two live emissions, and unsubscribe only at
+  // teardown — with NO unsubscribe call in between. This test makes that
+  // "still subscribed after the first emission" invariant an explicit,
+  // permanent assertion, closing the gap that let it go unasserted before:
+  // the earlier version of this test checked the resulting counts but never
+  // asserted that no unsubscribe happened between the two emissions, so a
+  // hypothetical future regression that tore the listener down after its
+  // first snapshot (still leaving stale-but-correct counts on screen, exactly
+  // matching the reported production symptom) would NOT have failed it.
+  it('stays subscribed across two live emissions (1/1/1/2 -> 2/2/2/4) and unsubscribes only at teardown, with no reload, remount, or auth change', async () => {
     const dashboard = mountDashboard();
     await dashboard.render();
+
+    expect(vocabSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(grammarSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(pagesSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
 
     // Each subscription's initial snapshot: one row each, two learning items.
     await act(async () => {
@@ -232,8 +274,16 @@ describe('Dashboard external-write live refresh (P7.3-I)', () => {
       learning: 2,
     });
 
+    // The listener must still be live — nothing has unsubscribed it — before
+    // the external write arrives.
+    expect(vocabSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(grammarSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(pagesSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(learningItemsSubs[0].unsubscribe).not.toHaveBeenCalled();
+
     // Simulate the Chrome extension's saveItems writing to all four
-    // collections in one call — the SAME listeners fire again, unprompted.
+    // collections in one call — the SAME listener instances fire again,
+    // unprompted, proving they were never torn down after the first snapshot.
     await act(async () => {
       vocabSub.subs[0].emit([vocab('v1'), vocab('v2')]);
       grammarSub.subs[0].emit([grammar('g1'), grammar('g2')]);
@@ -251,14 +301,24 @@ describe('Dashboard external-write live refresh (P7.3-I)', () => {
       learning: 4,
     });
 
-    // No fetch-based re-query was needed for any of the four collections.
+    // Still no unsubscribe, and still exactly one subscribe call each — no
+    // fetch-based re-query, no resubscribe, for any of the four collections.
+    expect(vocabSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(grammarSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(pagesSub.subs[0].unsubscribe).not.toHaveBeenCalled();
+    expect(learningItemsSubs[0].unsubscribe).not.toHaveBeenCalled();
     expect(listLearningItems).not.toHaveBeenCalled();
     expect(vocabSub.subscribe).toHaveBeenCalledTimes(1);
     expect(grammarSub.subscribe).toHaveBeenCalledTimes(1);
     expect(pagesSub.subscribe).toHaveBeenCalledTimes(1);
     expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
 
+    // Only tearing the component down (unmount) triggers cleanup.
     dashboard.unmount();
+    expect(vocabSub.subs[0].unsubscribe).toHaveBeenCalledTimes(1);
+    expect(grammarSub.subs[0].unsubscribe).toHaveBeenCalledTimes(1);
+    expect(pagesSub.subs[0].unsubscribe).toHaveBeenCalledTimes(1);
+    expect(learningItemsSubs[0].unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it('unsubscribes all four listeners on unmount (no leaks)', async () => {
@@ -284,5 +344,159 @@ describe('Dashboard external-write live refresh (P7.3-I)', () => {
     expect(pagesSub.subscribe).toHaveBeenCalledTimes(1);
 
     dashboard.unmount();
+  });
+});
+
+// P7.3-I hybrid fallback — production evidence cleared the deployed bundle,
+// write/listener paths, React effect lifecycle, and permission/query errors;
+// what's left is an unreliable Firestore Listen transport in the real browser
+// that this app can't root-cause further. These tests cover the fallback:
+// a one-shot re-fetch of all four collections on window focus / visible
+// visibilitychange, for exactly the case where onSnapshot never re-emits.
+describe('Dashboard focus/visibility fallback (P7.3-I)', () => {
+  async function primeBaseline(dashboard: ReturnType<typeof mountDashboard>) {
+    await act(async () => {
+      vocabSub.subs[0].emit([vocab('v1'), vocab('v2')]);
+      grammarSub.subs[0].emit([grammar('g1'), grammar('g2')]);
+      pagesSub.subs[0].emit([page('p1'), page('p2')]);
+      learningItemsSubs[0].emit({
+        items: [learningItem('l1'), learningItem('l2'), learningItem('l3'), learningItem('l4')],
+        nextCursor: null,
+      });
+    });
+    expect(tabCounts(dashboard.container)).toEqual({
+      vocab: 2,
+      grammar: 2,
+      pages: 2,
+      learning: 4,
+    });
+  }
+
+  it('refreshes to fresh server data on window focus when onSnapshot delivers no further emission', async () => {
+    const dashboard = mountDashboard();
+    await dashboard.render();
+    await primeBaseline(dashboard);
+
+    // Backend data changed (an extension save) but — exactly the production
+    // symptom — none of the four live listeners emit again.
+    getUserVocabularies.mockResolvedValueOnce([vocab('v1'), vocab('v2'), vocab('v3')]);
+    getUserGrammars.mockResolvedValueOnce([grammar('g1'), grammar('g2'), grammar('g3')]);
+    getUserAnalysisPages.mockResolvedValueOnce([page('p1'), page('p2'), page('p3')]);
+    listLearningItems.mockResolvedValueOnce({
+      items: [
+        learningItem('l5'),
+        learningItem('l1'),
+        learningItem('l2'),
+        learningItem('l3'),
+        learningItem('l4'),
+      ],
+      nextCursor: null,
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(tabCounts(dashboard.container)).toEqual({
+      vocab: 3,
+      grammar: 3,
+      pages: 3,
+      learning: 5,
+    });
+    expect(getUserVocabularies).toHaveBeenCalledWith('u1');
+    expect(getUserGrammars).toHaveBeenCalledWith('u1');
+    expect(getUserAnalysisPages).toHaveBeenCalledWith('u1');
+    expect(listLearningItems).toHaveBeenCalledWith();
+    // onSnapshot itself is untouched — no resubscribe, still primary.
+    expect(vocabSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(grammarSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(pagesSub.subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribeToLearningItems).toHaveBeenCalledTimes(1);
+
+    dashboard.unmount();
+  });
+
+  it('refreshes on visible visibilitychange too, but does nothing while hidden', async () => {
+    const dashboard = mountDashboard();
+    await dashboard.render();
+    await primeBaseline(dashboard);
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(getUserVocabularies).not.toHaveBeenCalled();
+    expect(listLearningItems).toHaveBeenCalledTimes(0);
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(getUserVocabularies).toHaveBeenCalledTimes(1);
+    expect(getUserGrammars).toHaveBeenCalledTimes(1);
+    expect(getUserAnalysisPages).toHaveBeenCalledTimes(1);
+    expect(listLearningItems).toHaveBeenCalledTimes(1);
+
+    dashboard.unmount();
+  });
+
+  it('does nothing when signed out', async () => {
+    authMock.user = null;
+    const dashboard = mountDashboard();
+    await dashboard.render();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(getUserVocabularies).not.toHaveBeenCalled();
+    expect(getUserGrammars).not.toHaveBeenCalled();
+    expect(getUserAnalysisPages).not.toHaveBeenCalled();
+    expect(listLearningItems).not.toHaveBeenCalled();
+
+    dashboard.unmount();
+  });
+
+  it('dedupes focus + visibilitychange firing together into one refresh burst (one call per collection)', async () => {
+    const dashboard = mountDashboard();
+    await dashboard.render();
+    await primeBaseline(dashboard);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(getUserVocabularies).toHaveBeenCalledTimes(1);
+    expect(getUserGrammars).toHaveBeenCalledTimes(1);
+    expect(getUserAnalysisPages).toHaveBeenCalledTimes(1);
+    expect(listLearningItems).toHaveBeenCalledTimes(1);
+
+    dashboard.unmount();
+  });
+
+  it('removes the focus/visibility listeners on unmount', async () => {
+    const dashboard = mountDashboard();
+    await dashboard.render();
+    await primeBaseline(dashboard);
+
+    dashboard.unmount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(getUserVocabularies).not.toHaveBeenCalled();
+    expect(getUserGrammars).not.toHaveBeenCalled();
+    expect(getUserAnalysisPages).not.toHaveBeenCalled();
+    expect(listLearningItems).not.toHaveBeenCalled();
   });
 });

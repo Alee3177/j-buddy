@@ -20,10 +20,19 @@
  * pages appended via `loadMore` are dropped and `cursor` is recomputed from the
  * fresh first page. This mirrors what a manual reload already did (start over
  * from page 1); it only makes it automatic.
+ *
+ * P7.3-I hybrid fallback: on top of the live listener, the first page is also
+ * re-fetched (one-shot, via `listLearningItems()`) whenever the tab regains
+ * focus or becomes visible again — a safety net for when the live Listen
+ * transport doesn't deliver an update while the tab was away. Applied through
+ * the same `FIRST_PAGE_OK` action the listener uses, so the trade-off above
+ * applies here too. A failed fallback read is swallowed rather than clearing
+ * good data (unlike a live-listener error, which does reset to empty).
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { listLearningItems, subscribeToLearningItems } from '@/services/firestoreService';
+import { useFocusRefresh } from './focusRefresh';
 import type { ListLearningItemsResult } from '@/types';
 import type { LearningItem } from '@/types';
 
@@ -148,6 +157,26 @@ export function startFirstPageFeed(
   }
 }
 
+/**
+ * P7.3-I hybrid fallback: one-shot re-fetch of the first page, applied via
+ * the same `FIRST_PAGE_OK` action `startFirstPageFeed` uses. Driven only by
+ * `useFocusRefresh` (window focus / visibilitychange), never by a timer.
+ */
+export async function runFocusRefresh(
+  dispatch: (event: LearningItemsFeedEvent) => void,
+  isCurrent: () => boolean,
+  fetchFirstPage: () => Promise<ListLearningItemsResult> = () => listLearningItems()
+): Promise<void> {
+  if (!isCurrent()) return;
+  try {
+    const result = await fetchFirstPage();
+    if (!isCurrent()) return;
+    dispatch({ type: 'FIRST_PAGE_OK', result });
+  } catch (error) {
+    console.error('Focus-refresh read failed:', error);
+  }
+}
+
 /** Load the page after `cursor` and append it. Same staleness guard as above. */
 export async function runNextPage(
   cursor: string,
@@ -210,6 +239,13 @@ export function useLearningItemsFeed(
     );
     return unsubscribe;
   }, [uid, authResolved]);
+
+  const refreshOnFocus = useCallback(() => {
+    const generation = generationRef.current;
+    return runFocusRefresh(dispatch, () => generationRef.current === generation);
+  }, []);
+
+  useFocusRefresh(authResolved && uid != null, refreshOnFocus);
 
   const loadMore = useCallback(() => {
     if (state.loadingMore || state.cursor == null) return;

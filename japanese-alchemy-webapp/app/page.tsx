@@ -14,6 +14,9 @@ import {
   subscribeToUserVocabularies,
   subscribeToUserGrammars,
   subscribeToUserAnalysisPages,
+  getUserVocabularies,
+  getUserGrammars,
+  getUserAnalysisPages,
   deleteAnalysisPage,
   getSharedAnalysisPages,
   getSharedVocabularies,
@@ -87,23 +90,28 @@ export default function Dashboard() {
   // Japanese Reader P7.3-I — personal 單字/文法/頁面, live via onSnapshot, so a
   // Chrome-extension save updates these tabs/counts in an already-open webapp
   // without a reload. See lib/userCollectionFeed.ts for the shared lifecycle
-  // rules (auth-gated, unsubscribes on sign-out/uid change/unmount).
+  // rules (auth-gated, unsubscribes on sign-out/uid change/unmount) and for
+  // the focus/visibility one-shot fallback (lib/focusRefresh.ts) layered on
+  // top of onSnapshot for when the live transport misses an update.
   const authResolved = !loading;
   const uid = user?.uid ?? null;
   const vocabularies = useUserCollectionFeed<Vocabulary>(
     uid,
     authResolved,
-    subscribeToUserVocabularies
+    subscribeToUserVocabularies,
+    getUserVocabularies
   );
   const grammars = useUserCollectionFeed<Grammar>(
     uid,
     authResolved,
-    subscribeToUserGrammars
+    subscribeToUserGrammars,
+    getUserGrammars
   );
   const analysisPages = useUserCollectionFeed<AnalysisPage>(
     uid,
     authResolved,
-    subscribeToUserAnalysisPages
+    subscribeToUserAnalysisPages,
+    getUserAnalysisPages
   );
 
   // Japanese Reader v0.4 P2.2 — read-only personal learning-items feed.
