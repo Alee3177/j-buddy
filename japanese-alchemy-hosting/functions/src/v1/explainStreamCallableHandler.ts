@@ -16,6 +16,7 @@ import {
   UnsupportedLanguageError,
 } from "./multilingualPreStage";
 import { detectLanguage } from "../services/languageDetection";
+import { UnknownTranslationProfileError } from "../models/translationProfile";
 import { RetryableProviderError } from "../services/httpRetry";
 import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "./providerBusyMessages";
 
@@ -82,7 +83,14 @@ export async function explainStreamCallableHandler(
     throw callableErrorForRateLimit(rateLimit.reason);
   }
 
-  const { content, prompt = "v2", context_before, context_after, translationStyle } = request.data as any;
+  const {
+    content,
+    prompt = "v2",
+    context_before,
+    context_after,
+    translationStyle,
+    translationProfileId,
+  } = request.data as any;
   const systemPrompt = prompt === "v2" ? SYSTEM_PROMPT_V2 : SYSTEM_PROMPT_V1;
 
   try {
@@ -108,7 +116,7 @@ export async function explainStreamCallableHandler(
     // explainHandler so detection/translation logic lives in exactly one
     // place. Translation itself is never streamed — it must fully complete
     // before analysis streaming begins.
-    const preStage = await runMultilingualPreStage(content, llmService, translationStyle);
+    const preStage = await runMultilingualPreStage(content, llmService, translationStyle, translationProfileId);
 
     // P8-C1: expose the pre-stage contract once, right after translation
     // completes, so the client can present the generated Japanese
@@ -150,6 +158,13 @@ export async function explainStreamCallableHandler(
         success: false,
         error: "Unsupported source language. J-Buddy currently supports Japanese, Chinese, and English source text.",
       };
+    }
+    if (error instanceof UnknownTranslationProfileError) {
+      // P8-D2: defense-in-depth — see the matching comment in explainCallable.ts.
+      logger.warn(`Rejected unknown translation profile: ${error.translationProfileId}`, {
+        client: clientTag(request.rawRequest.ip),
+      });
+      return { success: false, error: "Unknown translation profile." };
     }
     if (error instanceof TranslationFailedError) {
       logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);

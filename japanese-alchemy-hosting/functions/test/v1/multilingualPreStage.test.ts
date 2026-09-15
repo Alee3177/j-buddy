@@ -6,7 +6,11 @@ import {
   MAX_TRANSLATED_CONTENT_LENGTH,
 } from "../../src/v1/multilingualPreStage";
 import { buildTranslationSystemPrompt } from "../../src/models/translationPrompt";
+import { resolveTranslationProfile, UnknownTranslationProfileError } from "../../src/models/translationProfile";
 import { LlmService } from "../../src/services/llmService";
+
+const ORIWISH_PROFILE_ID = "oriwish-ja-business-v1";
+const oriwishProfile = resolveTranslationProfile(ORIWISH_PROFILE_ID)!;
 
 function fakeLlmService(chatCompletion: jest.Mock): LlmService {
   return {
@@ -160,5 +164,127 @@ describe("runMultilingualPreStage", () => {
       runMultilingualPreStage("안녕하세요", fakeLlmService(chatCompletion))
     ).rejects.toBeInstanceOf(UnsupportedLanguageError);
     expect(chatCompletion).not.toHaveBeenCalled();
+  });
+
+  describe("P8-D2 translation profile routing", () => {
+    it("Japanese input ignores an explicit profile id entirely — no LLM call, no profile in the result", async () => {
+      const chatCompletion = jest.fn();
+      const result = await runMultilingualPreStage(
+        "これはテストです",
+        fakeLlmService(chatCompletion),
+        "natural",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(result).toEqual({
+        detectedLanguage: "ja",
+        originalContent: "これはテストです",
+        analysisContent: "これはテストです",
+        translated: false,
+        translationStyle: "natural",
+      });
+      expect(result.translationProfileId).toBeUndefined();
+      expect(chatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("zh + profile: builds the profile-specialized prompt and reports profile metadata back", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "業務日本語の翻訳結果" } });
+
+      const result = await runMultilingualPreStage(
+        "这是一个测试",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledWith(
+        buildTranslationSystemPrompt("business", oriwishProfile),
+        "这是一个测试"
+      );
+      expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
+      expect(result.translationProfileVersion).toBe("1");
+    });
+
+    it("en + profile: profile applies the same way regardless of source language", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "業務日本語の翻訳結果" } });
+
+      const result = await runMultilingualPreStage(
+        "Hello there",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledWith(
+        buildTranslationSystemPrompt("business", oriwishProfile),
+        "Hello there"
+      );
+      expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
+    });
+
+    it("no profile id: translationProfileId/Version are absent from the result (not present as undefined keys)", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "翻訳結果" } });
+
+      const result = await runMultilingualPreStage("这是一个测试", fakeLlmService(chatCompletion));
+
+      expect(Object.prototype.hasOwnProperty.call(result, "translationProfileId")).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(result, "translationProfileVersion")).toBe(false);
+    });
+
+    it("style=natural + profile: brand profile still applies; generic style is NOT silently forced to business", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "業務らしい自然な翻訳結果" } });
+
+      const result = await runMultilingualPreStage(
+        "这是一个测试",
+        fakeLlmService(chatCompletion),
+        "natural",
+        ORIWISH_PROFILE_ID
+      );
+
+      const expectedPrompt = buildTranslationSystemPrompt("natural", oriwishProfile);
+      expect(chatCompletion).toHaveBeenCalledWith(expectedPrompt, "这是一个测试");
+      expect(expectedPrompt).toContain("自然日文");
+      expect(expectedPrompt).not.toContain("商務日文");
+      expect(expectedPrompt).toContain("【術語對照表】");
+      expect(result.translationStyle).toBe("natural");
+      expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
+    });
+
+    it("fails closed for an unrecognized profile id (defense-in-depth; requestValidation should already have blocked it)", async () => {
+      const chatCompletion = jest.fn();
+
+      await expect(
+        runMultilingualPreStage("这是一个测试", fakeLlmService(chatCompletion), "natural", "does-not-exist")
+      ).rejects.toBeInstanceOf(UnknownTranslationProfileError);
+      expect(chatCompletion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("P8-D2 sample test input (Section N)", () => {
+    const sampleSource = "ORIWISH XYZ-300 精密滑台採用線性滑軌，\n適用於自動化設備中的精密定位。\n符合 ISO 9001。";
+
+    it("the constructed prompt instructs preservation of every protected term and glossary mapping for the sample sentence", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({
+        response: {
+          success: true,
+          data: "ORIWISH XYZ-300 精密ステージはリニアガイドを採用し、自動化設備における精密位置決めに適しています。ISO 9001に準拠。",
+        },
+      });
+
+      await runMultilingualPreStage(sampleSource, fakeLlmService(chatCompletion), "business", ORIWISH_PROFILE_ID);
+
+      const [sentPrompt, sentContent] = chatCompletion.mock.calls[0];
+      expect(sentContent).toBe(sampleSource);
+      expect(sentPrompt).toContain("- ORIWISH");
+      expect(sentPrompt).toContain("- XYZ-300");
+      expect(sentPrompt).toContain("- ISO 9001");
+      expect(sentPrompt).toContain("精密滑台 → 精密ステージ");
+      expect(sentPrompt).toContain("線性滑軌 → リニアガイド");
+    });
   });
 });

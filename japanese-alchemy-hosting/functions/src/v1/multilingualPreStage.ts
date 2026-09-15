@@ -2,6 +2,7 @@ import { LlmService } from "../services/llmService";
 import { DetectedLanguage, detectLanguage } from "../services/languageDetection";
 import { buildTranslationSystemPrompt } from "../models/translationPrompt";
 import { DEFAULT_TRANSLATION_STYLE, TranslationStyle } from "../models/translationStyle";
+import { resolveTranslationProfile } from "../models/translationProfile";
 
 export type { DetectedLanguage };
 export type { TranslationStyle };
@@ -24,6 +25,13 @@ export interface PreStageResult {
   // client pick the matching translated-section label (自然日文/新聞日文/
   // 商務日文) without re-deriving it.
   translationStyle: TranslationStyle;
+  // P8-D2: present ONLY when a profile was actually applied (translated
+  // zh/en with a translationProfileId) — absent for ja and for no-profile
+  // requests. Metadata only: id + version, never the glossary/protected
+  // terms/brand-voice content itself (never leak server profile internals
+  // to the client).
+  translationProfileId?: string;
+  translationProfileVersion?: string;
 }
 
 /** Thrown when the source language is not one the pipeline supports (P8 scope: ja/zh/en only). */
@@ -77,15 +85,20 @@ export async function runMultilingualPreStage(
   // P8-C2: optional — the ONLY place an omitted style is resolved to
   // "natural". Callers (explainHandler, explainStreamCallableHandler) just
   // pass whatever validateExplainRequest already accepted through as-is.
-  translationStyle: TranslationStyle = DEFAULT_TRANSLATION_STYLE
+  translationStyle: TranslationStyle = DEFAULT_TRANSLATION_STYLE,
+  // P8-D2: optional — resolved to a TranslationProfile ONLY in the zh/en
+  // branch below. Never resolved/read on the ja path, so it is provably
+  // inert for Japanese input (no profile prompt construction at all).
+  translationProfileId?: string
 ): Promise<PreStageResult> {
   const detectedLanguage = detectLanguage(content);
 
   if (detectedLanguage === "ja") {
-    // P8-C2: translationStyle has no behavioral effect here — it is never
-    // read again below, so an ignored/unsupported value sent for Japanese
-    // input cannot affect anything. Still reported back for contract
-    // consistency with the zh/en case.
+    // P8-C2/P8-D2: translationStyle and translationProfileId have no
+    // behavioral effect here — neither is read again below, so an
+    // ignored/unsupported value sent for Japanese input cannot affect
+    // anything. Still reported back (style only) for contract consistency
+    // with the zh/en case; profile metadata is never attached for ja.
     return {
       detectedLanguage,
       originalContent: content,
@@ -99,10 +112,17 @@ export async function runMultilingualPreStage(
     throw new UnsupportedLanguageError(detectedLanguage);
   }
 
+  // P8-D2: resolved ONLY for zh/en, right before building the translation
+  // prompt. Fails closed (throws UnknownTranslationProfileError) for an
+  // unrecognized id — should never happen in practice since
+  // validateExplainRequest already checked it, but this is the actual
+  // fail-closed guarantee, not just an upstream courtesy check.
+  const profile = resolveTranslationProfile(translationProfileId);
+
   let translated: string;
   try {
     const completion = await llmService.chatCompletion(
-      buildTranslationSystemPrompt(translationStyle),
+      buildTranslationSystemPrompt(translationStyle, profile),
       content
     );
     translated = typeof completion.response?.data === "string" ? completion.response.data.trim() : "";
@@ -134,5 +154,6 @@ export async function runMultilingualPreStage(
     analysisContent: translated,
     translated: true,
     translationStyle,
+    ...(profile ? { translationProfileId: profile.id, translationProfileVersion: profile.version } : {}),
   };
 }

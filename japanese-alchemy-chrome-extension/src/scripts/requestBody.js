@@ -14,14 +14,19 @@
  *   zh/en source text that goes through translation; omitted entirely when not
  *   provided so the server's own "natural" default applies (backward compatible
  *   request shape when a caller doesn't pass one).
- * @returns {{ content: string, prompt: string, context_before?: string, context_after?: string, translationStyle?: string }}
+ * @param {string} [translationProfileId] - P8-D2: selects a server-authored
+ *   TranslationProfile (terminology glossary + protected terms + brand voice).
+ *   Omitted entirely when not provided — the public sidepanel UI never sets
+ *   this; see scripts/devTranslationProfile.js for the dev-only test hook.
+ * @returns {{ content: string, prompt: string, context_before?: string, context_after?: string, translationStyle?: string, translationProfileId?: string }}
  */
-export function buildRequestBody(content, promptVersion, context, translationStyle) {
+export function buildRequestBody(content, promptVersion, context, translationStyle, translationProfileId) {
   const body = { content, prompt: promptVersion || 'v2' };
   const before = context && context.before;
   const after = context && context.after;
   if (before) body.context_before = before;
   if (after) body.context_after = after;
   if (translationStyle) body.translationStyle = translationStyle;
+  if (translationProfileId) body.translationProfileId = translationProfileId;
   return body;
 }

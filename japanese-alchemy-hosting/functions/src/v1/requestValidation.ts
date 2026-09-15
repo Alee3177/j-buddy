@@ -1,5 +1,6 @@
 import { MAX_CONTEXT_CHARS } from "../models/analysisMessage";
 import { isValidTranslationStyle, TRANSLATION_STYLES } from "../models/translationStyle";
+import { isValidTranslationProfileId, TRANSLATION_PROFILE_IDS } from "../models/translationProfile";
 
 export const MIN_CONTENT_LENGTH = 2;
 export const MAX_CONTENT_LENGTH = 500;
@@ -76,6 +77,19 @@ export function validateExplainRequest(body: unknown): ValidationResult {
       ok: false,
       status: 400,
       error: `translationStyle must be one of: ${TRANSLATION_STYLES.join(", ")}`,
+    };
+  }
+
+  // P8-D2: optional; runMultilingualPreStage resolves an omitted value to
+  // "no profile" (existing P8-C2 behavior) and ignores it entirely for
+  // Japanese input. This is the ONLY validation point — the client never
+  // supplies profile content, only this small validated id.
+  const translationProfileId = (body as any)?.translationProfileId;
+  if (translationProfileId !== undefined && !isValidTranslationProfileId(translationProfileId)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `translationProfileId must be one of: ${TRANSLATION_PROFILE_IDS.join(", ")}`,
     };
   }
 

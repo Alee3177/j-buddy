@@ -530,4 +530,64 @@ describe('JaAlchemyApiService', () => {
       expect(callable).toHaveBeenCalledWith({ content: '这是一个测试', prompt: 'v2', translationStyle: 'news' });
     });
   });
+
+  describe('P8-D2 translation profile propagation', () => {
+    test('generateResponseStream includes an explicit translationProfileId in the streamed request body', async () => {
+      const callable = jest.fn();
+      callable.stream = jest.fn(async () => ({
+        stream: { async *[Symbol.asyncIterator]() {} },
+        data: Promise.resolve({ success: true }),
+      }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponseStream(
+        '这是一个测试', 'v2', undefined, jest.fn(), jest.fn(), jest.fn(),
+        { translationStyle: 'business', translationProfileId: 'oriwish-ja-business-v1' }
+      );
+
+      expect(callable.stream).toHaveBeenCalledWith(
+        {
+          content: '这是一个测试',
+          prompt: 'v2',
+          translationStyle: 'business',
+          translationProfileId: 'oriwish-ja-business-v1',
+        },
+        { signal: undefined }
+      );
+    });
+
+    test('generateResponseStream omits translationProfileId in normal (production) use — the dev hook defaults to null', async () => {
+      const callable = jest.fn();
+      callable.stream = jest.fn(async () => ({
+        stream: { async *[Symbol.asyncIterator]() {} },
+        data: Promise.resolve({ success: true }),
+      }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponseStream(
+        'テストです', 'v2', undefined, jest.fn(), jest.fn(), jest.fn()
+      );
+
+      expect(callable.stream).toHaveBeenCalledWith(
+        { content: 'テストです', prompt: 'v2' },
+        { signal: undefined }
+      );
+    });
+
+    test('generateResponse includes an explicit translationProfileId in the batch request body', async () => {
+      const callable = jest.fn(async () => ({ data: { success: true, data: 'result' } }));
+      mockHttpsCallable.mockReturnValue(callable);
+
+      await new JaAlchemyApiService().generateResponse(
+        '这是一个测试', 'v2', undefined, 'business', 'oriwish-ja-business-v1'
+      );
+
+      expect(callable).toHaveBeenCalledWith({
+        content: '这是一个测试',
+        prompt: 'v2',
+        translationStyle: 'business',
+        translationProfileId: 'oriwish-ja-business-v1',
+      });
+    });
+  });
 });

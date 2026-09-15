@@ -94,4 +94,49 @@ describe('buildRequestBody', () => {
       });
     });
   });
+
+  describe('P8-D2 translationProfileId', () => {
+    test('omitted translationProfileId → no translationProfileId key (backward compatible)', () => {
+      expect(buildRequestBody('テスト', 'v2', undefined, 'natural')).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        translationStyle: 'natural',
+      });
+    });
+
+    test('includes translationProfileId when provided', () => {
+      expect(buildRequestBody('テスト', 'v2', undefined, 'business', 'oriwish-ja-business-v1')).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        translationStyle: 'business',
+        translationProfileId: 'oriwish-ja-business-v1',
+      });
+    });
+
+    test('omits translationProfileId when falsy', () => {
+      expect(buildRequestBody('テスト', 'v2', undefined, 'business', '')).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        translationStyle: 'business',
+      });
+      expect(buildRequestBody('テスト', 'v2', undefined, 'business', undefined)).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        translationStyle: 'business',
+      });
+    });
+
+    test('combines with context fields and translationStyle', () => {
+      expect(
+        buildRequestBody('テスト', 'v2', { before: '前', after: '後' }, 'business', 'oriwish-ja-business-v1')
+      ).toEqual({
+        content: 'テスト',
+        prompt: 'v2',
+        context_before: '前',
+        context_after: '後',
+        translationStyle: 'business',
+        translationProfileId: 'oriwish-ja-business-v1',
+      });
+    });
+  });
 });

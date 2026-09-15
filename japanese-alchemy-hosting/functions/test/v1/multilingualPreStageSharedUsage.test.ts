@@ -62,11 +62,8 @@ describe("shared multilingual pre-stage usage", () => {
   // (single) call site shape — not two independently-wired copies.
   it("P8-C2: explainHandler forwards translationStyle to the shared pre-stage helper", async () => {
     await explainHandler({ data: { content: "テストです", translationStyle: "business" } } as any);
-    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith(
-      "テストです",
-      expect.anything(),
-      "business"
-    );
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
+    expect(mockRunMultilingualPreStage.mock.calls[0][2]).toBe("business");
   });
 
   it("P8-C2: explainStreamCallableHandler forwards translationStyle to the shared pre-stage helper", async () => {
@@ -75,10 +72,27 @@ describe("shared multilingual pre-stage usage", () => {
       acceptsStreaming: false,
       rawRequest: { ip: "127.0.0.1" },
     } as any);
-    expect(mockRunMultilingualPreStage).toHaveBeenCalledWith(
-      "テストです",
-      expect.anything(),
-      "news"
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
+    expect(mockRunMultilingualPreStage.mock.calls[0][2]).toBe("news");
+  });
+
+  // P8-D2: same "one shared helper, not two copies" guarantee, now for
+  // translationProfileId (4th positional argument).
+  it("P8-D2: explainHandler forwards translationProfileId to the shared pre-stage helper", async () => {
+    await explainHandler(
+      { data: { content: "テストです", translationProfileId: "oriwish-ja-business-v1" } } as any
     );
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
+    expect(mockRunMultilingualPreStage.mock.calls[0][3]).toBe("oriwish-ja-business-v1");
+  });
+
+  it("P8-D2: explainStreamCallableHandler forwards translationProfileId to the shared pre-stage helper", async () => {
+    await explainStreamCallableHandler({
+      data: { content: "テストです", translationProfileId: "oriwish-ja-business-v1" },
+      acceptsStreaming: false,
+      rawRequest: { ip: "127.0.0.1" },
+    } as any);
+    expect(mockRunMultilingualPreStage.mock.calls[0][0]).toBe("テストです");
+    expect(mockRunMultilingualPreStage.mock.calls[0][3]).toBe("oriwish-ja-business-v1");
   });
 });

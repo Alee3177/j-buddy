@@ -41,6 +41,13 @@ export interface ExplainRequest {
   // multilingual pre-stage translation; optional, defaults to "natural";
   // ignored server-side for Japanese input even if present.
   translationStyle?: TranslationStyle;
+  // P8-D2: selects a server-authored TranslationProfile (terminology
+  // glossary + protected terms + brand voice) layered on top of
+  // translationStyle. Optional; validated against a small server-known
+  // allowlist (models/translationProfile.ts) — the client NEVER supplies
+  // glossary/protectedTerms/brandVoice content directly. Ignored
+  // server-side for Japanese input even if present.
+  translationProfileId?: string;
 }
 
 export interface SaveItemsRequest {

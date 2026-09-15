@@ -2,6 +2,7 @@
 import { httpsCallable } from 'firebase/functions';
 import { firebaseApp, firebaseFunctions } from './firebaseApp.js';
 import { buildRequestBody } from './requestBody.js';
+import { DEV_TEST_TRANSLATION_PROFILE_ID } from './devTranslationProfile.js';
 
 class JaAlchemyApiService {
   constructor() {
@@ -18,18 +19,21 @@ class JaAlchemyApiService {
    * @param {string} promptVersion - The prompt version ("v1" or "v2")
    * @param {{ before?: string, after?: string }} [context] - surrounding page context
    * @param {"natural"|"news"|"business"} [translationStyle] - P8-C2: only affects zh/en source text
+   * @param {string} [translationProfileId] - P8-D2: only affects zh/en source text; production
+   *   callers never pass this (falls back to the dev-only test hook, default null)
    * @returns {Promise<Object>} Analysis result
    */
-  async generateResponse(selectedText, promptVersion = "v2", context, translationStyle) {
+  async generateResponse(selectedText, promptVersion = "v2", context, translationStyle, translationProfileId) {
     try {
       console.log('[Firebase API] Calling explain function with:', {
         content: selectedText.substring(0, 100) + '...',
         prompt: promptVersion
       });
 
+      const resolvedProfileId = translationProfileId ?? DEV_TEST_TRANSLATION_PROFILE_ID ?? undefined;
       const explainCallable = httpsCallable(this.functions, 'explain');
       const result = await explainCallable(
-        buildRequestBody(selectedText, promptVersion, context, translationStyle)
+        buildRequestBody(selectedText, promptVersion, context, translationStyle, resolvedProfileId)
       );
 
       /*
@@ -63,18 +67,24 @@ class JaAlchemyApiService {
    * @param {{
    *   signal?: AbortSignal,
    *   onStatus?: (status: string) => void,
-   *   onPreStage?: (preStage: { detectedLanguage: string, originalContent: string, analysisContent: string, translated: boolean, translationStyle: string }) => void,
+   *   onPreStage?: (preStage: { detectedLanguage: string, originalContent: string, analysisContent: string, translated: boolean, translationStyle: string, translationProfileId?: string, translationProfileVersion?: string }) => void,
    *   translationStyle?: "natural"|"news"|"business",
+   *   translationProfileId?: string,
    * }} [options] - cancellation options for the callable request. `onStatus` (P8-B) is invoked for a
    *   non-content status marker the callable can send ahead of analysis (currently only "translating",
    *   emitted once when non-Japanese source text is being translated before analysis begins) — it never
    *   fires for the Japanese fast path. `onPreStage` (P8-C1) is invoked once, after translation completes
    *   and before analysis streaming begins, with the full multilingual pre-stage contract — also never
    *   fires for the Japanese fast path (translated === false is never sent over the wire at all).
-   *   `translationStyle` (P8-C2) rides here rather than as a positional parameter, matching onStatus/
-   *   onPreStage, so existing positional call sites are unaffected; it only ever affects zh/en source text.
+   *   `translationStyle` (P8-C2) and `translationProfileId` (P8-D2) ride here rather than as positional
+   *   parameters, matching onStatus/onPreStage, so existing positional call sites are unaffected; both
+   *   only ever affect zh/en source text. The public sidepanel UI never sets `translationProfileId` — see
+   *   scripts/devTranslationProfile.js for the dev-only test hook used when this option is omitted.
    */
-  async generateResponseStream(selectedText, promptVersion, context, onChunk, onDone, onError, { signal, onStatus, onPreStage, translationStyle } = {}) {
+  async generateResponseStream(
+    selectedText, promptVersion, context, onChunk, onDone, onError,
+    { signal, onStatus, onPreStage, translationStyle, translationProfileId } = {}
+  ) {
     let fullText = '';
     try {
       if (signal?.aborted) {
@@ -86,9 +96,10 @@ class JaAlchemyApiService {
         prompt: promptVersion
       });
 
+      const resolvedProfileId = translationProfileId ?? DEV_TEST_TRANSLATION_PROFILE_ID ?? undefined;
       const explainStreamCallable = httpsCallable(this.functions, 'explainStreamCallable');
       const { stream, data } = await explainStreamCallable.stream(
-        buildRequestBody(selectedText, promptVersion, context, translationStyle),
+        buildRequestBody(selectedText, promptVersion, context, translationStyle, resolvedProfileId),
         { signal }
       );
       // Firebase rejects both stream and data when an AbortSignal cancels the

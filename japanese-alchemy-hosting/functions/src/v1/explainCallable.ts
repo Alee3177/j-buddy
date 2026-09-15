@@ -14,6 +14,7 @@ import {
   TranslationFailedError,
   UnsupportedLanguageError,
 } from "./multilingualPreStage";
+import { UnknownTranslationProfileError } from "../models/translationProfile";
 import { RetryableProviderError } from "../services/httpRetry";
 import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "./providerBusyMessages";
 
@@ -34,7 +35,7 @@ export async function explainHandler(
   }
 
   // Defaults match the Chrome extension and streaming callable.
-  const { content, prompt = "v2", context_before, context_after, translationStyle } = data;
+  const { content, prompt = "v2", context_before, context_after, translationStyle, translationProfileId } = data;
 
   // Per-IP rate limit (parity with explainStreamCallable). The callable's client IP is
   // on the underlying Express request.
@@ -61,7 +62,7 @@ export async function explainHandler(
     // existing (unmodified) Japanese Analyzer runs. Shared with
     // explainStreamCallableHandler so detection/translation logic lives in
     // exactly one place.
-    const preStage = await runMultilingualPreStage(content, llmService, translationStyle);
+    const preStage = await runMultilingualPreStage(content, llmService, translationStyle, translationProfileId);
 
     const completion = await llmService.chatCompletion(
       systemPrompt,
@@ -91,6 +92,15 @@ export async function explainHandler(
         "invalid-argument",
         "Unsupported source language. J-Buddy currently supports Japanese, Chinese, and English source text."
       );
+    }
+    if (error instanceof UnknownTranslationProfileError) {
+      // P8-D2: defense-in-depth — validateExplainRequest already rejects an
+      // unrecognized translationProfileId before this point, so this should
+      // never trigger in practice. Fail closed anyway, same shape as the
+      // unsupported-language case, rather than falling through to the
+      // generic 500 below.
+      logger.warn(`Rejected unknown translation profile: ${error.translationProfileId}`);
+      throw new functions.https.HttpsError("invalid-argument", "Unknown translation profile.");
     }
     if (error instanceof TranslationFailedError) {
       logger.error(`Translation pre-stage failed (${error.detectedLanguage})`, error);

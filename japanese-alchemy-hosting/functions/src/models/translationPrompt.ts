@@ -1,15 +1,24 @@
 import { TranslationStyle } from "./translationStyle";
+import { TranslationProfile } from "./translationProfile";
 
 /**
- * P8-B/P8-C2 pre-stage translation prompt. Used ONLY to turn non-Japanese
- * source text into Japanese ahead of the existing (unmodified) Japanese
- * Analyzer prompts (systemPromptV1/V2) — it is not an analysis prompt
- * itself, and its output must be plain translated text with nothing else.
+ * P8-B/P8-C2/P8-D2 pre-stage translation prompt. Used ONLY to turn
+ * non-Japanese source text into Japanese ahead of the existing (unmodified)
+ * Japanese Analyzer prompts (systemPromptV1/V2) — it is not an analysis
+ * prompt itself, and its output must be plain translated text with nothing
+ * else.
  *
  * P8-C2 architecture: one shared instruction block common to every style,
  * plus a small per-style block appended on top — rather than three
  * mostly-duplicated giant prompts. Adding a style is "add one entry to
  * STYLE_INSTRUCTIONS", never "copy the whole prompt a fourth time".
+ *
+ * P8-D2 extends this compositionally with an OPTIONAL TranslationProfile:
+ *   1. COMMON_TRANSLATION_RULES        (facts + output-format — unchanged)
+ *   2. profile HARD constraints        (glossary + protected terms — only if profile given)
+ *   3. STYLE_INSTRUCTIONS[style]       (generic register — unchanged)
+ *   4. profile brand-voice block       (SOFT specialization — only if profile given)
+ * No profile -> byte-identical output to pre-P8-D2 (verified by tests).
  */
 
 const COMMON_TRANSLATION_RULES = `規則（所有風格皆適用）：
@@ -37,12 +46,63 @@ const STYLE_INSTRUCTIONS: Record<TranslationStyle, string> = {
 - 規格、數字、型號、產品名稱必須逐一保留，不得省略或改寫其指稱對象。`,
 };
 
-/** Builds the translation system prompt for one style. */
-export function buildTranslationSystemPrompt(style: TranslationStyle): string {
-  return `你是一名專業的日文翻譯。
-任務：把使用者提供的原文（中文或英文）翻譯成日文，供後續的日文學習分析系統使用。
+/**
+ * Renders a profile's terminology glossary + protected terms as one clearly
+ * delimited, deterministic HARD-constraint block (P8-D2 Section H/I).
+ *
+ * Glossary entries are sorted longest-source-first ("longest-match-first",
+ * Section F): a more specific/longer term (e.g. 精密滑台) is presented
+ * ahead of any shorter term that could otherwise be read as matching a
+ * substring of it, reducing the chance the model applies the wrong rule to
+ * an overlapping span. This is deterministic PREPARATION of the prompt
+ * instruction — never semantic/fuzzy matching, and never a code-level
+ * find/replace over the source or translated text.
+ */
+function buildProfileHardConstraintsBlock(profile: TranslationProfile): string {
+  const sortedGlossary = [...profile.terminologyGlossary].sort((a, b) => {
+    const aMax = Math.max(...a.sourceTerms.map((s) => s.length));
+    const bMax = Math.max(...b.sourceTerms.map((s) => s.length));
+    return bMax - aMax;
+  });
 
-${COMMON_TRANSLATION_RULES}
+  const glossaryLines = sortedGlossary
+    .map((entry) => `- ${entry.sourceTerms.join(" / ")} → ${entry.target}`)
+    .join("\n") || "（無）";
 
-${STYLE_INSTRUCTIONS[style]}`;
+  const protectedLines = profile.protectedTerms.map((term) => `- ${term}`).join("\n") || "（無）";
+
+  return `以下為必須遵守的專有名詞規則（優先權高於下方的風格與品牌語氣說明，兩者衝突時一律以此區塊為準，不可違反）：
+
+【術語對照表】（原文出現對應詞彙時，必須翻譯為指定的日文用詞，不得使用其他譯法或自行意譯）：
+${glossaryLines}
+
+【受保護用詞】（必須在譯文中原樣保留，不得翻譯、音譯、增刪、改寫或省略）：
+${protectedLines}`;
+}
+
+/** Renders a profile's SOFT brand-voice specialization, layered after style. */
+function buildBrandVoiceBlock(profile: TranslationProfile): string {
+  return `品牌語氣調整（在完全遵守上方【術語對照表】與【受保護用詞】、且不新增任何原文沒有的資訊、優點、認證或宣稱的前提下，微調用字與語氣）：
+${profile.brandVoice.description}`;
+}
+
+/** Builds the translation system prompt for one style, optionally specialized by a translation profile. */
+export function buildTranslationSystemPrompt(style: TranslationStyle, profile?: TranslationProfile): string {
+  const parts = [
+    `你是一名專業的日文翻譯。
+任務：把使用者提供的原文（中文或英文）翻譯成日文，供後續的日文學習分析系統使用。`,
+    COMMON_TRANSLATION_RULES,
+  ];
+
+  if (profile) {
+    parts.push(buildProfileHardConstraintsBlock(profile));
+  }
+
+  parts.push(STYLE_INSTRUCTIONS[style]);
+
+  if (profile) {
+    parts.push(buildBrandVoiceBlock(profile));
+  }
+
+  return parts.join("\n\n");
 }

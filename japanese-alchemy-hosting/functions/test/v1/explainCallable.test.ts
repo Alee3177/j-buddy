@@ -4,8 +4,12 @@ import { checkRateLimit } from "../../src/v1/rateLimiter";
 import { SYSTEM_PROMPT_V1 } from "../../src/models/systemPromptV1";
 import { SYSTEM_PROMPT_V2 } from "../../src/models/systemPromptV2";
 import { buildTranslationSystemPrompt } from "../../src/models/translationPrompt";
+import { resolveTranslationProfile } from "../../src/models/translationProfile";
 import { RetryableProviderError } from "../../src/services/httpRetry";
 import { ANALYSIS_BUSY_MESSAGE, TRANSLATION_BUSY_MESSAGE } from "../../src/v1/providerBusyMessages";
+
+const ORIWISH_PROFILE_ID = "oriwish-ja-business-v1";
+const oriwishProfile = resolveTranslationProfile(ORIWISH_PROFILE_ID)!;
 
 // `mock`-prefixed vars are the one exception jest allows inside a mock factory.
 // Cast as any: jest.fn() infers `never` under this global jest typing, which
@@ -368,6 +372,183 @@ describe("explainHandler", () => {
       expect(mockChatCompletion).toHaveBeenCalledTimes(1);
       expect(mockChatCompletion).toHaveBeenCalledWith(SYSTEM_PROMPT_V2, "テストです");
       expect(result.preStage).toBeUndefined();
+    });
+  });
+
+  describe("P8-D2 server-side translation profile", () => {
+    it("omitted translationProfileId → existing (no-profile) behavior unchanged", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "これはテストです" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler({ data: { content: "这是一个测试" } } as any);
+
+      expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt("natural"));
+      expect(result.preStage?.translationProfileId).toBeUndefined();
+    });
+
+    it("valid oriwish-ja-business-v1 is accepted and threaded to the translation prompt", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "業務日本語の翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "这是一个测试", translationStyle: "business", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt("business", oriwishProfile));
+      expect(result.preStage?.translationProfileId).toBe(ORIWISH_PROFILE_ID);
+      expect(result.preStage?.translationProfileVersion).toBe("1");
+    });
+
+    it("an unknown translationProfileId is rejected cleanly before any LLM call", async () => {
+      await expect(
+        explainHandler({ data: { content: "这是一个测试", translationProfileId: "not-a-real-profile" } } as any)
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("an invalid-type translationProfileId is rejected cleanly before any LLM call", async () => {
+      await expect(
+        explainHandler({ data: { content: "这是一个测试", translationProfileId: 123 } } as any)
+      ).rejects.toMatchObject({ code: "invalid-argument" });
+
+      expect(mockChatCompletion).not.toHaveBeenCalled();
+    });
+
+    it("batch handler propagates the profile id through to the shared pre-stage", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "業務日本語の翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler(
+        { data: { content: "这是一个测试", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(mockChatCompletion.mock.calls[0][0]).toContain("【術語對照表】");
+    });
+
+    it("ja fast-path ignores the profile and makes no translation call", async () => {
+      mockChatCompletion.mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "テストです", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(mockChatCompletion).toHaveBeenCalledTimes(1);
+      expect(mockChatCompletion).toHaveBeenCalledWith(SYSTEM_PROMPT_V2, "テストです");
+      expect(result.preStage).toBeUndefined();
+    });
+
+    it("zh + profile applies the glossary mapping instructions", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "業務翻訳" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler(
+        { data: { content: "线性滑轨测试", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(mockChatCompletion.mock.calls[0][0]).toContain("線性滑軌 → リニアガイド");
+    });
+
+    it("en + profile preserves the protected-term instructions", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "Business translation" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler(
+        { data: { content: "ORIWISH test sentence", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(mockChatCompletion.mock.calls[0][0]).toContain("- ORIWISH");
+    });
+
+    it("profile metadata is included in the response ONLY when translation actually happened (not for ja)", async () => {
+      mockChatCompletion.mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "テストです", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      expect(result.preStage).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result, "translationProfileId")).toBe(false);
+    });
+
+    it("full profile internals (glossary/protectedTerms/brandVoice) are never emitted to the client response", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "業務日本語の翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: "这是一个测试", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("精密ステージ");
+      expect(serialized).not.toContain("terminologyGlossary");
+      expect(serialized).not.toContain("protectedTerms");
+      expect(serialized).not.toContain("brandVoice");
+      // Only the small id/version metadata is present.
+      expect(result.preStage?.translationProfileId).toBe(ORIWISH_PROFILE_ID);
+    });
+
+    it("style=business + profile: generic business register AND profile brand voice both apply, hard terms win", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler(
+        { data: { content: "这是一个测试", translationStyle: "business", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      const sentPrompt = mockChatCompletion.mock.calls[0][0];
+      expect(sentPrompt).toContain("商務日文");
+      expect(sentPrompt).toContain("品牌語氣調整");
+      expect(sentPrompt).toContain("【術語對照表】");
+      expect(sentPrompt.indexOf("術語對照表")).toBeLessThan(sentPrompt.indexOf("商務日文"));
+    });
+
+    it("style=natural + profile: brand profile still applies without forcing business register", async () => {
+      mockChatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "翻訳結果" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      await explainHandler(
+        { data: { content: "这是一个测试", translationStyle: "natural", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      const sentPrompt = mockChatCompletion.mock.calls[0][0];
+      expect(sentPrompt).toContain("自然日文");
+      expect(sentPrompt).not.toContain("商務日文");
+      expect(sentPrompt).toContain("品牌語氣調整");
+      expect(sentPrompt).toContain("【術語對照表】");
+    });
+
+    it("P8-D2 sample sentence: prompt preserves protected terms and glossary mappings end to end", async () => {
+      const sampleSource = "ORIWISH XYZ-300 精密滑台採用線性滑軌，\n適用於自動化設備中的精密定位。\n符合 ISO 9001。";
+      mockChatCompletion
+        .mockResolvedValueOnce({
+          response: {
+            success: true,
+            data: "ORIWISH XYZ-300 精密ステージはリニアガイドを採用し、自動化設備における精密位置決めに適しています。ISO 9001に準拠。",
+          },
+        })
+        .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
+
+      const result = await explainHandler(
+        { data: { content: sampleSource, translationStyle: "business", translationProfileId: ORIWISH_PROFILE_ID } } as any
+      );
+
+      const [sentPrompt, sentContent] = mockChatCompletion.mock.calls[0];
+      expect(sentContent).toBe(sampleSource);
+      expect(sentPrompt).toContain("精密滑台 → 精密ステージ");
+      expect(sentPrompt).toContain("線性滑軌 → リニアガイド");
+      expect(sentPrompt).toContain("- ORIWISH");
+      expect(sentPrompt).toContain("- XYZ-300");
+      expect(sentPrompt).toContain("- ISO 9001");
+      expect(result.preStage?.analysisContent).toContain("ORIWISH XYZ-300");
     });
   });
 });
