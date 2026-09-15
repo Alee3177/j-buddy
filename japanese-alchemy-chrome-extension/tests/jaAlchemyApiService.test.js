@@ -18,6 +18,16 @@ jest.mock('firebase/functions', () => ({
   httpsCallable: jest.fn(),
 }));
 
+// This file's tests exercise jaAlchemyApiService.js's own behavior and must
+// stay correct regardless of the DEV_TEST_TRANSLATION_PROFILE_ID hook's
+// current value (which is deliberately flipped on/off for temporary P8-D2
+// live-test commits — see devTranslationProfile.js). Pin it to the real
+// production default (null) here; the hook's activation/fallback behavior
+// itself is covered separately in jaAlchemyApiService.devProfileHook.test.js.
+jest.mock('../src/scripts/devTranslationProfile.js', () => ({
+  DEV_TEST_TRANSLATION_PROFILE_ID: null,
+}));
+
 import JaAlchemyApiService from '../src/scripts/jaAlchemyApiService.js';
 
 const { firebaseApp: mockAppInstance, firebaseFunctions: mockFunctionsInstance } =
