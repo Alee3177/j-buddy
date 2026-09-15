@@ -325,7 +325,75 @@ function normalizePersistedReading(reading) {
     return { version: 1, source_text: reading.source_text, tokens };
 }
 
-function normalizeStructuredAnalysisResult(json) {
+/**
+ * P8-D3: validate and clone persisted translation metadata for
+ * `structured_json.translation`. Accepts ONLY the exact persisted shape —
+ * malformed input is dropped fail-closed (never guessed/repaired), matching
+ * `normalizePersistedReading`'s policy. Never present for Japanese-source
+ * analyses (the caller only ever attaches this block when the server
+ * pre-stage actually translated zh/en source text).
+ *
+ * `translationProfileId` and `translationProfileVersion` must both be
+ * present or both be absent — a cached entry with only one is treated as
+ * corrupted and the WHOLE translation block is dropped, rather than
+ * silently keeping half of it.
+ *
+ * @param {unknown} translation
+ * @returns {{
+ *   sourceLanguage: 'zh'|'en',
+ *   translationStyle: string,
+ *   translationProfileId?: string,
+ *   translationProfileVersion?: string,
+ *   translatedJapanese: string,
+ * }|null}
+ */
+export function normalizePersistedTranslation(translation) {
+    if (!translation || typeof translation !== 'object' || Array.isArray(translation)) return null;
+
+    const { sourceLanguage, translationStyle, translatedJapanese, translationProfileId, translationProfileVersion } = translation;
+
+    if (sourceLanguage !== 'zh' && sourceLanguage !== 'en') return null;
+    if (typeof translationStyle !== 'string' || translationStyle.length === 0) return null;
+    if (typeof translatedJapanese !== 'string' || translatedJapanese.length === 0) return null;
+
+    const hasProfileId = translationProfileId !== undefined;
+    const hasProfileVersion = translationProfileVersion !== undefined;
+    if (hasProfileId !== hasProfileVersion) return null;
+    if (hasProfileId && (typeof translationProfileId !== 'string' || translationProfileId.length === 0)) return null;
+    if (hasProfileVersion && (typeof translationProfileVersion !== 'string' || translationProfileVersion.length === 0)) return null;
+
+    const result = { sourceLanguage, translationStyle, translatedJapanese };
+    if (hasProfileId) {
+        result.translationProfileId = translationProfileId;
+        result.translationProfileVersion = translationProfileVersion;
+    }
+    return result;
+}
+
+/**
+ * P8-D3: build the persisted translation metadata block from the
+ * AUTHORITATIVE server pre-stage contract — never from displayed labels
+ * (自然日文/新聞日文/商務日文) or any other client-derived state. Callers
+ * must only invoke this when `preStage.translated` is true (zh/en); ja
+ * never reaches this, so no translation block is ever attached for it.
+ * `translatedJapanese` is `preStage.analysisContent` byte-for-byte — never
+ * re-derived, never passed through markdown/ruby processing.
+ * @param {{ detectedLanguage: string, translationStyle: string, translationProfileId?: string, translationProfileVersion?: string, analysisContent: string }} preStage
+ */
+export function buildTranslationMetadataForSave(preStage) {
+    const translation = {
+        sourceLanguage: preStage.detectedLanguage,
+        translationStyle: preStage.translationStyle,
+        translatedJapanese: preStage.analysisContent,
+    };
+    if (preStage.translationProfileId) {
+        translation.translationProfileId = preStage.translationProfileId;
+        translation.translationProfileVersion = preStage.translationProfileVersion;
+    }
+    return translation;
+}
+
+export function normalizeStructuredAnalysisResult(json) {
     if (!json || typeof json !== 'object') return null;
 
     const normalizedJson = {
@@ -367,6 +435,21 @@ function normalizeStructuredAnalysisResult(json) {
             }
             return items;
         }, []);
+    }
+
+    // P8-D3: optional `translation` sub-object (sourceLanguage,
+    // translationStyle, translationProfileId?, translationProfileVersion?,
+    // translatedJapanese) — only ever present for a translated zh/en
+    // analysis. Absent (Japanese-source analyses, pre-P8-D3 cached
+    // projections) is left untouched; present but malformed is dropped
+    // fail-closed, same policy as `reading`.
+    if ('translation' in normalizedJson) {
+        const normalizedTranslation = normalizePersistedTranslation(normalizedJson.translation);
+        if (normalizedTranslation) {
+            normalizedJson.translation = normalizedTranslation;
+        } else {
+            delete normalizedJson.translation;
+        }
     }
 
     return Array.isArray(normalizedJson.words)
@@ -930,11 +1013,22 @@ export async function analizingSelectedText(selectedText, context = { before: ''
                         const enrichedText = enrichMarkdownWithConjugation(rubyRepair.text);
                         activeAnalysisPreviewText = '';
                         const formattedResult = formatAnalysisResult(enrichedText);
-                        const normalizedJson = normalizeStructuredAnalysisResult(
-                            persistedReading
-                                ? { ...formattedResult.json, reading: persistedReading }
-                                : formattedResult.json
-                        );
+                        // P8-D3: additive structured_json.translation metadata —
+                        // built ONLY from the authoritative server preStage
+                        // contract (never from displayed labels), and ONLY when
+                        // translation actually happened (capturedPreStage stays
+                        // null/untranslated on the Japanese fast path, so no
+                        // translation block is ever attached there). Flows
+                        // through the SAME structured_json pipeline as `reading`
+                        // below, so it reaches save/cache/restore for free.
+                        let mergedJson = formattedResult.json;
+                        if (persistedReading) {
+                            mergedJson = { ...mergedJson, reading: persistedReading };
+                        }
+                        if (capturedPreStage?.translated) {
+                            mergedJson = { ...mergedJson, translation: buildTranslationMetadataForSave(capturedPreStage) };
+                        }
+                        const normalizedJson = normalizeStructuredAnalysisResult(mergedJson);
                         if (!normalizedJson) {
                             throw new Error('Unable to format the completed analysis result.');
                         }

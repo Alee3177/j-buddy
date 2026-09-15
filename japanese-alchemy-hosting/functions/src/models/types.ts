@@ -115,12 +115,31 @@ export interface StructuredAnalysis {
   // pre-v0.3 saved page. Persistence is wholesale (firestoreService copies
   // structured_json as-is) — do not add server-side handling for this field.
   reading?: ReadingTokenContract;
+  // P8-D3: reproducibility metadata for a translated (zh/en source) analysis.
+  // Present only when the multilingual pre-stage actually translated the
+  // source text; absent for Japanese-source analyses and every pre-P8-D3
+  // saved page. Persistence is wholesale (firestoreService copies
+  // structured_json as-is) — do not add server-side handling for this field.
+  // Intentionally excludes the terminology glossary, protected-term list,
+  // brand-voice instructions, and full translation prompt — see
+  // TranslationMetadata for the exact persisted shape.
+  translation?: TranslationMetadata;
 }
 
 export interface ReadingTokenContract {
   version: 1;
   source_text: string;
   tokens: Array<{ text: string; reading: string | null }>;
+}
+
+// P8-D3: additive, reproducibility-only translation metadata. Deliberately
+// narrow — no glossary/protectedTerms/brandVoice/prompt content, ever.
+export interface TranslationMetadata {
+  sourceLanguage: 'zh' | 'en';
+  translationStyle: string;
+  translationProfileId?: string;
+  translationProfileVersion?: string;
+  translatedJapanese: string;
 }
 
 // LLM API types (OpenAI-compatible, used by Gemini and ZAI)

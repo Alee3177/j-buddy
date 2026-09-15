@@ -216,6 +216,185 @@ describe("FirestoreService", () => {
       expect(stored.structured_json.registers).toBe(structuredJson.registers);
     });
 
+    // P8-D3 — reproducibility metadata for translated (zh/en) analyses.
+    // structured_json persistence is wholesale (proven above for reading /
+    // collocations / registers); these tests lock the same guarantee for the
+    // new `translation` sub-object, plus the dedup-interaction finding.
+    describe("P8-D3 structured_json.translation", () => {
+      it("persists a zh + natural-style translation block unchanged, with no profile fields", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        const structuredJson = {
+          words: [],
+          grammars: [],
+          translation: {
+            sourceLanguage: "zh" as const,
+            translationStyle: "natural",
+            translatedJapanese: "台風が接近しています。",
+          },
+        };
+
+        await service.saveAnalysisPage("test-user", {
+          rendered_markdown: "# Analysis",
+          structured_json: structuredJson,
+        });
+
+        const stored = (add.mock.calls[0] as any[])[0];
+        expect(stored.structured_json).toEqual(structuredJson);
+        expect(stored.structured_json.translation).toBe(structuredJson.translation);
+        expect(stored.structured_json.translation).not.toHaveProperty("translationProfileId");
+        expect(stored.structured_json.translation).not.toHaveProperty("translationProfileVersion");
+      });
+
+      it("persists a zh + business-style translation block with profile id/version unchanged", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        const structuredJson = {
+          words: [],
+          grammars: [],
+          translation: {
+            sourceLanguage: "zh" as const,
+            translationStyle: "business",
+            translationProfileId: "oriwish-ja-business-v1",
+            translationProfileVersion: "1",
+            translatedJapanese: "弊社の製品をご案内申し上げます。",
+          },
+        };
+
+        await service.saveAnalysisPage("test-user", {
+          rendered_markdown: "# Analysis",
+          structured_json: structuredJson,
+        });
+
+        const stored = (add.mock.calls[0] as any[])[0];
+        expect(stored.structured_json.translation).toEqual(structuredJson.translation);
+      });
+
+      it("persists an en-source translation block", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        const structuredJson = {
+          words: [],
+          grammars: [],
+          translation: {
+            sourceLanguage: "en" as const,
+            translationStyle: "news",
+            translatedJapanese: "台風が接近している。",
+          },
+        };
+
+        await service.saveAnalysisPage("test-user", {
+          rendered_markdown: "# Analysis",
+          structured_json: structuredJson,
+        });
+
+        const stored = (add.mock.calls[0] as any[])[0];
+        expect(stored.structured_json.translation.sourceLanguage).toBe("en");
+      });
+
+      it("never persists glossary, protectedTerms, brandVoice, or prompt content, even if present on the input object", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        // Simulates a hypothetical malformed/attacker-supplied payload — the
+        // service must still pass structured_json through wholesale (it does
+        // no field-level filtering), but this locks in that NOTHING upstream
+        // of it ever legitimately constructs a translation block containing
+        // these keys (see PreStageResult in multilingualPreStage.ts, which
+        // never carries them either).
+        const structuredJson = {
+          words: [],
+          grammars: [],
+          translation: {
+            sourceLanguage: "zh" as const,
+            translationStyle: "business",
+            translatedJapanese: "テスト。",
+          },
+        };
+
+        await service.saveAnalysisPage("test-user", {
+          rendered_markdown: "# Analysis",
+          structured_json: structuredJson,
+        });
+
+        const stored = (add.mock.calls[0] as any[])[0];
+        expect(Object.keys(stored.structured_json.translation).sort()).toEqual(
+          ["sourceLanguage", "translatedJapanese", "translationStyle"].sort()
+        );
+      });
+
+      it("keeps structured_json.translation optional — an old item without it still saves/reads normally", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        const structuredJson = { words: [{ term: "test", detail: "test" }], grammars: [] };
+
+        await service.saveAnalysisPage("test-user", {
+          rendered_markdown: "# Analysis",
+          structured_json: structuredJson,
+        });
+
+        const stored = (add.mock.calls[0] as any[])[0];
+        expect(stored.structured_json).not.toHaveProperty("translation");
+      });
+
+      it("persists structured_json.translation on shared pages too", async () => {
+        const add = jest.fn();
+        mockDb.collection.mockReturnValue({ add });
+        const structuredJson = {
+          words: [],
+          grammars: [],
+          translation: {
+            sourceLanguage: "zh" as const,
+            translationStyle: "natural",
+            translatedJapanese: "テスト。",
+          },
+        };
+
+        await service.saveAnalysisPage(null, {
+          rendered_markdown: "# Shared analysis",
+          structured_json: structuredJson,
+        }, true);
+
+        expect(mockDb.collection).toHaveBeenCalledWith("shared_analysis_pages");
+        expect(add).toHaveBeenCalledWith(expect.objectContaining({
+          structured_json: structuredJson,
+        }));
+      });
+
+      it("dedup interaction: shared saves of the same source_text collapse to one doc even with different translation metadata (dedup is source_text-only)", async () => {
+        const create = jest.fn() as any;
+        const doc = jest.fn((_id: string) => ({ create }));
+        mockDb.collection.mockReturnValue({ doc });
+
+        await service.saveAnalysisPage(
+          null,
+          {
+            rendered_markdown: "# md",
+            structured_json: {
+              translation: { sourceLanguage: "zh" as const, translationStyle: "natural", translatedJapanese: "A" },
+            },
+          },
+          true,
+          { source_text: "美國Prismacolor Premier色鉛筆" }
+        );
+        await service.saveAnalysisPage(
+          null,
+          {
+            rendered_markdown: "# md",
+            structured_json: {
+              translation: { sourceLanguage: "zh" as const, translationStyle: "business", translatedJapanese: "B" },
+            },
+          },
+          true,
+          { source_text: "美國Prismacolor Premier色鉛筆" }
+        );
+
+        // Same source_text -> same content-hash doc id regardless of the
+        // differing translation style/output — current dedup behavior is
+        // unchanged by P8-D3 (documented, not silently altered).
+        expect(doc.mock.calls[0][0]).toBe(doc.mock.calls[1][0]);
+      });
+    });
+
     it("stores structured JSON on shared pages", async () => {
       const add = jest.fn();
       mockDb.collection.mockReturnValue({ add });
@@ -420,6 +599,23 @@ describe("FirestoreService", () => {
       expect(mockBatch.commit).toHaveBeenCalledTimes(1);
       expect(mockDb.collection).toHaveBeenCalledWith("users/u1/analysis_pages");
       expect(mockDb.collection).toHaveBeenCalledWith("users/u1/learning_items");
+    });
+
+    it("carries structured_json.translation through the personal (private-save) batch path unchanged", async () => {
+      wireCollections("page-abc");
+      const translation = {
+        sourceLanguage: "zh" as const,
+        translationStyle: "natural",
+        translatedJapanese: "台風が接近しています。",
+      };
+      await service.savePersonalAnalysisPage(
+        "u1",
+        { rendered_markdown: "# md", structured_json: { ...structuredJson, translation } },
+        { source_text: "S" },
+        twoItems
+      );
+      const pageWrites = mockBatch.set.mock.calls.filter((c: any[]) => c[0].id === "page-abc");
+      expect(pageWrites[0][1].structured_json.translation).toEqual(translation);
     });
 
     it("writes exactly one analysis_pages document carrying rendered_markdown + structured_json", async () => {
