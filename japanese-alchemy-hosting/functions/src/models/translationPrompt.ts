@@ -106,3 +106,49 @@ export function buildTranslationSystemPrompt(style: TranslationStyle, profile?: 
 
   return parts.join("\n\n");
 }
+
+/**
+ * P8-D4.2: what a corrective retry needs to say — ONLY the specific
+ * mappings/terms that were actually missed, never the whole glossary
+ * again (translationTerminology.ts computes this from the matched
+ * constraints that failed validation).
+ */
+export interface TerminologyCorrectionRequest {
+  glossaryViolations: { sourceTerm: string; target: string }[];
+  protectedTermViolations: string[];
+}
+
+/**
+ * P8-D4.2: builds the ONE-SHOT corrective retry system prompt used when a
+ * first translation attempt violates one or more enforcement-"stable"
+ * terminology constraints. Reuses `buildTranslationSystemPrompt` verbatim
+ * as the base (same style + full profile hard-constraint block + brand
+ * voice a real request would already have sent) and appends a short,
+ * violation-specific addendum — never a from-scratch prompt, and never
+ * more glossary content than the original call already sent.
+ */
+export function buildCorrectiveTerminologySystemPrompt(
+  style: TranslationStyle,
+  profile: TranslationProfile,
+  correction: TerminologyCorrectionRequest
+): string {
+  const basePrompt = buildTranslationSystemPrompt(style, profile);
+
+  const glossaryLines =
+    correction.glossaryViolations.map((violation) => `- ${violation.sourceTerm} → ${violation.target}`).join("\n") ||
+    "（無）";
+  const protectedLines = correction.protectedTermViolations.map((term) => `- ${term}`).join("\n") || "（無）";
+
+  const addendum = `【修正指示】前一次翻譯未正確遵守下列必要術語，請重新產生完整的日文翻譯：
+
+以下術語對應為必須遵守（原文出現對應詞彙時必須使用指定譯法；若原文僅出現對照表中「較短」的詞彙，請勿誤用對照表中「較長」詞彙的譯法，例如原文僅為「櫻花」而非「櫻花圖案」時，請使用「桜」而非「桜柄」）：
+${glossaryLines}
+
+以下受保護用詞在前次翻譯中缺漏或被更動，請確保譯文中原樣包含：
+${protectedLines}
+
+請務必保留所有事實內容、數字、單位、品牌名稱與原文語意，不得新增原文沒有的宣稱或資訊。
+僅輸出修正後的完整日文翻譯本身，不要輸出任何說明、引號、標籤或其他文字。`;
+
+  return `${basePrompt}\n\n${addendum}`;
+}

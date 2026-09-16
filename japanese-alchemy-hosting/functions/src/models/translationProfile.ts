@@ -25,7 +25,12 @@
  *     new SKU-specific literal entry (共10色 -> 全10色, distinct from the
  *     existing 共10色可選 -> 全10色から選べる) since that IS directly
  *     evidenced now — the new entry is a runtime change, so version bumped
- *     3 -> 4. See the profile definition below and
+ *     3 -> 4. P8-D4.2 added a per-entry `enforcement` (stable/volatile)
+ *     classification (see TerminologyEnforcementClass above) and a
+ *     post-translation validator + single corrective retry
+ *     (translationTerminology.ts) — data-only addition, glossary content
+ *     unchanged, so no version bump for this phase. See the profile
+ *     definition below and
  *     docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md.
  */
 
@@ -48,6 +53,32 @@ export const MAX_SERIALIZED_PROFILE_CONTEXT_CHARS = 4000;
 // P8-D1 audit) can reuse this same validator without change.
 const FORBIDDEN_TERM_CHARS = /[【】\n\r]/;
 
+/**
+ * P8-D4.2: whether a matched glossary target is safe to mechanically
+ * ENFORCE (validate + one corrective retry) after translation, vs merely
+ * DETECT (log only, never retry/reject) — see translationTerminology.ts.
+ *
+ * "stable"   — a noun / proper-noun / loanword / preserve-as-is / fixed
+ *              short phrase with essentially one natural Japanese
+ *              rendering and no risk of a validator false-positive from
+ *              grammatical inflection. A miss here is treated as a real
+ *              terminology violation worth retrying.
+ * "volatile" — a descriptive adjective/verb-phrase target that may
+ *              legitimately appear inflected (い-adjective conjugation
+ *              breaks literal substring match) or creatively reworded by
+ *              a fluent translation (many valid near-synonyms exist). A
+ *              miss here is NOT trustworthy enough to retry on — it would
+ *              risk flagging (and “fixing”) perfectly good output.
+ *
+ * Optional and defaults to "volatile" (the conservative choice — never
+ * silently promotes an unclassified entry into retry-triggering
+ * enforcement) when omitted, e.g. by ad hoc profiles built only for
+ * unrelated validator tests.
+ */
+export type TerminologyEnforcementClass = "stable" | "volatile";
+
+const VALID_ENFORCEMENT_CLASSES: readonly TerminologyEnforcementClass[] = ["stable", "volatile"];
+
 export interface GlossaryEntry {
   /**
    * Exact source string(s) that map to this ONE canonical Japanese target.
@@ -58,6 +89,8 @@ export interface GlossaryEntry {
   sourceTerms: string[];
   /** Single canonical Japanese target. */
   target: string;
+  /** P8-D4.2 enforcement classification — see TerminologyEnforcementClass. */
+  enforcement?: TerminologyEnforcementClass;
 }
 
 export interface TranslationProfile {
@@ -121,6 +154,9 @@ function validateTranslationProfile(profile: TranslationProfile): void {
   for (const entry of profile.terminologyGlossary) {
     if (entry.target.length > MAX_TERM_LENGTH) fail(`glossary target "${entry.target}" exceeds ${MAX_TERM_LENGTH} chars`);
     if (FORBIDDEN_TERM_CHARS.test(entry.target)) fail(`glossary target "${entry.target}" contains a forbidden character`);
+    if (entry.enforcement !== undefined && !VALID_ENFORCEMENT_CLASSES.includes(entry.enforcement)) {
+      fail(`glossary entry "${entry.target}" has an invalid enforcement class "${entry.enforcement}"`);
+    }
     serializedChars += entry.target.length;
 
     for (const source of entry.sourceTerms) {
@@ -208,52 +244,85 @@ function defineProfile(profile: TranslationProfile): TranslationProfile {
 const ORIWISH_JA_BUSINESS_V1 = defineProfile({
   id: "oriwish-ja-business-v1",
   version: "4",
+  // Protected terms are ALWAYS enforcement-"stable" (P8-D4.2 Section D) —
+  // this is a fixed code-level rule (see translationTerminology.ts), not a
+  // per-term data field, since protectedTerms is a plain string[].
   protectedTerms: ["ORIWISH"],
+  // `enforcement` below is a SEPARATE axis from the SOURCE-CONFIRMED/
+  // GENERIC-EC provenance grouping (still reflected by the section
+  // comments) — it says whether a miss is safe to mechanically retry on
+  // (stable) or must stay detect-only (volatile). Audited per entry:
+  //   stable   -> noun / proper-noun / loanword / preserve-as-is / fixed
+  //               short phrase; no inflection risk, low creative-synonym
+  //               pull (even 布地, which has a real 生地-vs-布地 synonym
+  //               risk, is still "stable": that risk has NO false-positive
+  //               danger for the validator, so a miss is exactly the kind
+  //               of thing a corrective retry should fix).
+  //   volatile -> descriptive adjective/verb-phrase target: either
+  //               grammatically inflects (い-adjective conjugation breaks
+  //               literal substring match, e.g. 持ち運びしやすい ->
+  //               持ち運びしやすく) or has demonstrated real near-synonym
+  //               competition in ORIWISH's own approved copy (e.g. 日常使い
+  //               was never actually used for 日常使用 in the one
+  //               real sentence we have — see the P8-D4.1 canonical
+  //               source doc). Flagging a miss here as a "violation"
+  //               would risk retrying perfectly good, just differently
+  //               phrased, output.
   terminologyGlossary: [
     // --- SOURCE-CONFIRMED (Class A) ---------------------------------
-    { sourceTerms: ["長夾", "長錢包", "長財布"], target: "長財布" },
-    { sourceTerms: ["和風圖案", "和柄"], target: "和柄" },
-    { sourceTerms: ["櫻花圖案", "桜柄"], target: "桜柄" },
-    { sourceTerms: ["金襴織"], target: "金襴織" },
-    { sourceTerms: ["西陣織"], target: "西陣織" },
-    { sourceTerms: ["高雅", "上品"], target: "上品" },
-    { sourceTerms: ["華麗"], target: "華やか" },
-    { sourceTerms: ["質感"], target: "質感" },
-    { sourceTerms: ["收納"], target: "収納" },
-    { sourceTerms: ["包包"], target: "バッグ" },
-    { sourceTerms: ["禮物"], target: "贈り物" },
-    { sourceTerms: ["外盒"], target: "外箱" },
-    { sourceTerms: ["顏色"], target: "カラー" },
-    { sourceTerms: ["顏色款式"], target: "カラーバリエーション" },
-    { sourceTerms: ["色調", "色合"], target: "色合い" },
-    { sourceTerms: ["尺寸"], target: "サイズ" },
-    { sourceTerms: ["布料"], target: "布地" },
-    { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください" },
+    { sourceTerms: ["長夾", "長錢包", "長財布"], target: "長財布", enforcement: "stable" },
+    { sourceTerms: ["和風圖案", "和柄"], target: "和柄", enforcement: "stable" },
+    { sourceTerms: ["櫻花圖案", "桜柄"], target: "桜柄", enforcement: "stable" },
+    { sourceTerms: ["金襴織"], target: "金襴織", enforcement: "stable" },
+    { sourceTerms: ["西陣織"], target: "西陣織", enforcement: "stable" },
+    // Volatile: 高雅/華麗 are subjective/evaluative adjectives with many
+    // valid near-synonyms in fluent Japanese (優雅, 気品がある, 絢爛, 豪華,
+    // ...) — a miss is not reliable evidence of an actual violation.
+    { sourceTerms: ["高雅", "上品"], target: "上品", enforcement: "volatile" },
+    { sourceTerms: ["華麗"], target: "華やか", enforcement: "volatile" },
+    { sourceTerms: ["質感"], target: "質感", enforcement: "stable" },
+    { sourceTerms: ["收納"], target: "収納", enforcement: "stable" },
+    { sourceTerms: ["包包"], target: "バッグ", enforcement: "stable" },
+    { sourceTerms: ["禮物"], target: "贈り物", enforcement: "stable" },
+    { sourceTerms: ["外盒"], target: "外箱", enforcement: "stable" },
+    { sourceTerms: ["顏色"], target: "カラー", enforcement: "stable" },
+    { sourceTerms: ["顏色款式"], target: "カラーバリエーション", enforcement: "stable" },
+    { sourceTerms: ["色調", "色合"], target: "色合い", enforcement: "stable" },
+    { sourceTerms: ["尺寸"], target: "サイズ", enforcement: "stable" },
+    { sourceTerms: ["布料"], target: "布地", enforcement: "stable" },
+    { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください", enforcement: "stable" },
     // SKU-specific literals (both match OW_01's confirmed 共10色 color
     // count exactly, per the Product Image 1 bilingual heading — P8-D4.1a)
     // — NOT a general "共N色" pattern. A different color count on a
     // different SKU simply won't match either entry and falls through to
     // ordinary translation, still covered by the numeric-preservation rule
     // in COMMON_TRANSLATION_RULES.
-    { sourceTerms: ["共10色可選"], target: "全10色から選べる" },
-    { sourceTerms: ["共10色"], target: "全10色" },
+    { sourceTerms: ["共10色可選"], target: "全10色から選べる", enforcement: "stable" },
+    { sourceTerms: ["共10色"], target: "全10色", enforcement: "stable" },
     // P8-D4.1a: promoted from GENERIC-EC — the Product Image 1 bilingual
     // heading (和柄長財布 / 桜 金襴織 / 上品 軽量 全10色 / ORIWISH ↔
     // 和風圖案長夾 / 櫻花 金襴織 / 高雅 輕量 共10色 / ORIWISH) is a
     // word-for-word aligned tag list, not a creative full sentence, so it
     // directly confirms these two bare-term mappings.
-    { sourceTerms: ["櫻花", "桜"], target: "桜" },
-    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
+    { sourceTerms: ["櫻花", "桜"], target: "桜", enforcement: "stable" },
+    { sourceTerms: ["輕量", "軽量"], target: "軽量", enforcement: "stable" },
 
     // --- GENERIC-EC (Class B) ---------------------------------------
-    { sourceTerms: ["收納包"], target: "収納ポーチ" },
-    { sourceTerms: ["禮品"], target: "ギフト" },
-    { sourceTerms: ["商品說明"], target: "商品説明" },
-    { sourceTerms: ["商品特色"], target: "商品の特徴" },
-    { sourceTerms: ["商品尺寸"], target: "商品サイズ" },
-    { sourceTerms: ["素材"], target: "素材" },
-    { sourceTerms: ["方便攜帶"], target: "持ち運びしやすい" },
-    { sourceTerms: ["日常使用"], target: "日常使い" },
+    { sourceTerms: ["收納包"], target: "収納ポーチ", enforcement: "stable" },
+    { sourceTerms: ["禮品"], target: "ギフト", enforcement: "stable" },
+    { sourceTerms: ["商品說明"], target: "商品説明", enforcement: "stable" },
+    { sourceTerms: ["商品特色"], target: "商品の特徴", enforcement: "stable" },
+    { sourceTerms: ["商品尺寸"], target: "商品サイズ", enforcement: "stable" },
+    { sourceTerms: ["素材"], target: "素材", enforcement: "stable" },
+    // Volatile: い-adjective, conjugates (しやすく/しやすさ/...), AND
+    // OW_01's own approved copy used a differently-structured phrase
+    // (毎日に寄り添う軽やかさ) for the closely related 輕巧 concept.
+    { sourceTerms: ["方便攜帶"], target: "持ち運びしやすい", enforcement: "volatile" },
+    // Volatile: source term appears verbatim in OW_01, but the one real
+    // approved sentence using it was translated with a wholly different
+    // phrase (毎日に寄り添う軽やかさ), never 日常使い — see the P8-D4.1
+    // canonical source doc's "notable register findings."
+    { sourceTerms: ["日常使用"], target: "日常使い", enforcement: "volatile" },
   ],
   brandVoice: {
     description:

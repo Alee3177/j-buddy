@@ -289,4 +289,245 @@ describe("runMultilingualPreStage", () => {
       expect(sentPrompt).toContain("輕量 / 軽量 → 軽量");
     });
   });
+
+  describe("P8-D4.2: terminology enforcement (matcher + validator + single corrective retry)", () => {
+    it("protected term ORIWISH missing from the first attempt triggers exactly one corrective retry", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "和柄長財布です。" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "ORIWISHの和柄長財布です。" } });
+
+      const result = await runMultilingualPreStage(
+        "ORIWISH 和風圖案長夾",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      const [correctivePrompt] = chatCompletion.mock.calls[1];
+      expect(correctivePrompt).toContain("【修正指示】");
+      expect(correctivePrompt).toContain("- ORIWISH");
+      expect(result.analysisContent).toBe("ORIWISHの和柄長財布です。");
+    });
+
+    it("compliant original translation triggers no retry", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "ORIWISHの和柄長財布です。" } });
+
+      const result = await runMultilingualPreStage(
+        "ORIWISH 和風圖案長夾",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(1);
+      expect(result.analysisContent).toBe("ORIWISHの和柄長財布です。");
+    });
+
+    it("named regression: 櫻花 -> 桜柄 (business style) triggers exactly one stable-violation retry", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザインを採用しました。" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜のデザインを採用しました。" } });
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.analysisContent).toBe("桜のデザインを採用しました。");
+    });
+
+    it("retry that resolves the violation: retry output is used", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜のデザイン" } });
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(result.analysisContent).toBe("桜のデザイン");
+    });
+
+    it("retry that remains non-compliant: no second retry, fail-open to the (usable) retry output", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄デザイン第一版" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄デザイン第二版" } });
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.analysisContent).toBe("桜柄デザイン第二版");
+    });
+
+    it("retry call itself failing (provider error) fails open to the ORIGINAL translation, never throws", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+        .mockRejectedValueOnce(new Error("provider unavailable"));
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.analysisContent).toBe("桜柄のデザイン");
+    });
+
+    it("retry output that is empty is rejected; original translation is kept", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "   " } });
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.analysisContent).toBe("桜柄のデザイン");
+    });
+
+    it("volatile-only miss (高雅 -> 上品) never triggers a retry", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "エレガントなデザインです。" } });
+
+      const result = await runMultilingualPreStage(
+        "高雅的設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(1);
+      expect(result.analysisContent).toBe("エレガントなデザインです。");
+    });
+
+    it("mixed stable + volatile miss: retry happens (once) because of the stable violation only", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄でエレガントなデザイン" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜でエレガントなデザイン" } });
+
+      const result = await runMultilingualPreStage(
+        "櫻花與高雅設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).toHaveBeenCalledTimes(2);
+      expect(result.analysisContent).toBe("桜でエレガントなデザイン");
+    });
+
+    it("no-profile requests never validate/retry, even if the (unrelated) output would have violated a real profile's terms", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion.mockResolvedValue({ response: { success: true, data: "桜柄のデザイン" } });
+
+      const result = await runMultilingualPreStage("採用櫻花設計", fakeLlmService(chatCompletion));
+
+      expect(chatCompletion).toHaveBeenCalledTimes(1);
+      expect(result.analysisContent).toBe("桜柄のデザイン");
+      expect(Object.prototype.hasOwnProperty.call(result, "translationProfileId")).toBe(false);
+    });
+
+    it("ja fast-path never validates/retries (no translation call at all, profile or not)", async () => {
+      const chatCompletion = jest.fn();
+      const result = await runMultilingualPreStage(
+        "これはテストです",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(chatCompletion).not.toHaveBeenCalled();
+      expect(result.translated).toBe(false);
+    });
+
+    it.each(["natural", "news", "business"] as const)(
+      "%s style is preserved in the corrective retry prompt",
+      async (style) => {
+        const chatCompletion = jest.fn() as any;
+        chatCompletion
+          .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+          .mockResolvedValueOnce({ response: { success: true, data: "桜のデザイン" } });
+
+        await runMultilingualPreStage("採用櫻花設計", fakeLlmService(chatCompletion), style, ORIWISH_PROFILE_ID);
+
+        const [correctivePrompt] = chatCompletion.mock.calls[1];
+        const styleMarker = { natural: "自然日文", news: "新聞日文", business: "商務日文" }[style];
+        expect(correctivePrompt).toContain(styleMarker);
+      }
+    );
+
+    it("corrective addendum reminds the model to preserve facts/numbers/units and not add claims", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜のデザイン" } });
+
+      await runMultilingualPreStage("採用櫻花設計", fakeLlmService(chatCompletion), "business", ORIWISH_PROFILE_ID);
+
+      const [correctivePrompt] = chatCompletion.mock.calls[1];
+      expect(correctivePrompt).toContain("事實內容");
+      expect(correctivePrompt).toContain("數字");
+      expect(correctivePrompt).toContain("單位");
+      expect(correctivePrompt).toContain("不得新增原文沒有的宣稱");
+    });
+
+    it("the retry call reuses the SAME original source content (facts/numbers untouched by the corrective step)", async () => {
+      const chatCompletion = jest.fn() as any;
+      const source = "採用櫻花設計，本體約19x10x1.8cm，重量約300g。";
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン、約19x10x1.8cm、約300g。" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜のデザイン、約19x10x1.8cm、約300g。" } });
+
+      await runMultilingualPreStage(source, fakeLlmService(chatCompletion), "business", ORIWISH_PROFILE_ID);
+
+      const [, firstContent] = chatCompletion.mock.calls[0];
+      const [, retryContent] = chatCompletion.mock.calls[1];
+      expect(firstContent).toBe(source);
+      expect(retryContent).toBe(source);
+    });
+
+    it("PreStageResult.analysisContent (what P8-D3 persists as translatedJapanese) equals the FINAL translation actually used, including profile metadata", async () => {
+      const chatCompletion = jest.fn() as any;
+      chatCompletion
+        .mockResolvedValueOnce({ response: { success: true, data: "桜柄のデザイン" } })
+        .mockResolvedValueOnce({ response: { success: true, data: "桜のデザイン" } });
+
+      const result = await runMultilingualPreStage(
+        "採用櫻花設計",
+        fakeLlmService(chatCompletion),
+        "business",
+        ORIWISH_PROFILE_ID
+      );
+
+      expect(result.analysisContent).toBe("桜のデザイン");
+      expect(result.translationProfileId).toBe(ORIWISH_PROFILE_ID);
+      expect(result.translationProfileVersion).toBe(oriwishProfile.version);
+    });
+  });
 });

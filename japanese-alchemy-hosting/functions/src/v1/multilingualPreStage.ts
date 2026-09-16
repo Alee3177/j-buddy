@@ -1,8 +1,10 @@
 import { LlmService } from "../services/llmService";
 import { DetectedLanguage, detectLanguage } from "../services/languageDetection";
-import { buildTranslationSystemPrompt } from "../models/translationPrompt";
+import { buildCorrectiveTerminologySystemPrompt, buildTranslationSystemPrompt } from "../models/translationPrompt";
 import { DEFAULT_TRANSLATION_STYLE, TranslationStyle } from "../models/translationStyle";
 import { resolveTranslationProfile } from "../models/translationProfile";
+import { findTerminologyViolations, matchTerminologyConstraints } from "../models/translationTerminology";
+import { logger } from "../utils/logger";
 
 export type { DetectedLanguage };
 export type { TranslationStyle };
@@ -148,10 +150,78 @@ export async function runMultilingualPreStage(
     );
   }
 
+  // P8-D4.2: deterministic source-glossary matching + collision-aware
+  // output validation + one bounded corrective retry, ONLY when a profile
+  // is actually in play (no-profile requests and the ja fast-path above
+  // never reach this branch at all, so both are provably inert). Never
+  // throws on a terminology miss — always fails open to the best available
+  // translation (Section G). See translationTerminology.ts.
+  let finalTranslated = translated;
+
+  if (profile) {
+    const matched = matchTerminologyConstraints(content, profile);
+
+    if (matched.length > 0) {
+      const allMatchedTargets = new Set(matched.map((constraint) => constraint.target));
+      const stableConstraints = matched.filter((constraint) => constraint.enforcement === "stable");
+      const volatileConstraints = matched.filter((constraint) => constraint.enforcement === "volatile");
+
+      const stableViolations = findTerminologyViolations(stableConstraints, allMatchedTargets, translated, profile);
+      const volatileViolations = findTerminologyViolations(volatileConstraints, allMatchedTargets, translated, profile);
+
+      // Detect-only diagnostics (Section E) — never influence retry/output.
+      // Sanitized: counts only, never the actual glossary terms or text.
+      if (volatileViolations.length > 0) {
+        logger.info(
+          `Terminology diagnostic (volatile, detect-only): ${volatileViolations.length} possible miss(es), profile=${profile.id}`
+        );
+      }
+
+      if (stableViolations.length > 0) {
+        logger.warn(
+          `Terminology violation: ${stableViolations.length} stable constraint(s) missed, profile=${profile.id}; issuing one corrective retry`
+        );
+
+        const correctivePrompt = buildCorrectiveTerminologySystemPrompt(translationStyle, profile, {
+          glossaryViolations: stableViolations
+            .filter((violation) => violation.kind === "glossary")
+            .map((violation) => ({ sourceTerm: violation.sourceTerm, target: violation.target })),
+          protectedTermViolations: stableViolations
+            .filter((violation) => violation.kind === "protected")
+            .map((violation) => violation.target),
+        });
+
+        try {
+          const retryCompletion = await llmService.chatCompletion(correctivePrompt, content);
+          const retryTranslated =
+            typeof retryCompletion.response?.data === "string" ? retryCompletion.response.data.trim() : "";
+
+          // Fail-open rule (Section G): use the retry output whenever it's
+          // usable, regardless of whether it still has a residual
+          // violation — never a second retry, never throw for this reason.
+          if (retryTranslated && retryTranslated.length <= MAX_TRANSLATED_CONTENT_LENGTH) {
+            const retryStillViolates =
+              findTerminologyViolations(stableConstraints, allMatchedTargets, retryTranslated, profile).length > 0;
+            finalTranslated = retryTranslated;
+            logger.info(
+              `Terminology corrective retry used, profile=${profile.id}, outcome=${retryStillViolates ? "still-non-compliant" : "resolved"}`
+            );
+          } else {
+            logger.warn(
+              `Terminology corrective retry output rejected (${retryTranslated ? "exceeded length ceiling" : "empty"}), profile=${profile.id}; keeping original translation`
+            );
+          }
+        } catch (error) {
+          logger.error(`Terminology corrective retry call failed, profile=${profile.id}; keeping original translation`, error);
+        }
+      }
+    }
+  }
+
   return {
     detectedLanguage,
     originalContent: content,
-    analysisContent: translated,
+    analysisContent: finalTranslated,
     translated: true,
     translationStyle,
     ...(profile ? { translationProfileId: profile.id, translationProfileVersion: profile.version } : {}),
