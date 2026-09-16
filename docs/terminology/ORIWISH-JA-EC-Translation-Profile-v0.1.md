@@ -1,12 +1,12 @@
 ---
 module: functions/models/translationProfile
 problem_type: terminology-governance
-tags: [p8-d4, p8-d4-1, oriwish, translation-profile, japanese-ec, terminology]
+tags: [p8-d4, p8-d4-1, p8-d4-1a, oriwish, translation-profile, japanese-ec, terminology]
 ---
 
 # ORIWISH Japanese EC Translation Profile — v0.1
 
-Profile id: `oriwish-ja-business-v1` · Profile version: `"3"`
+Profile id: `oriwish-ja-business-v1` · Profile version: `"4"`
 Code: `japanese-alchemy-hosting/functions/src/models/translationProfile.ts`
 Canonical source: [`sources/ORIWISH-OW01-Canonical-Product-Source-v0.1.md`](sources/ORIWISH-OW01-Canonical-Product-Source-v0.1.md)
 
@@ -25,6 +25,14 @@ grounded it against real, owner-verified ORIWISH source material — see
 Section 3. This document no longer states that no ORIWISH source material
 exists; it now exists, and is recorded verbatim in the canonical source
 doc linked above.
+
+**P8-D4.1a update:** a further "Product Image 1" bilingual heading was
+supplied (a word-for-word aligned tag list, not a creative sentence),
+directly confirming three previously-generic/absent mappings: 櫻花→桜 and
+輕量→軽量 (reclassified GENERIC-EC → SOURCE-CONFIRMED, no runtime data
+change), and a new bare 共10色→全10色 literal (a new runtime entry, kept
+separate from the existing 共10色可選→全10色から選べる sentence-form
+entry). See Sections 4/5/11.
 
 ## 2. Product domain
 
@@ -55,6 +63,14 @@ Both are transcribed verbatim, with no paraphrasing, in
 [`sources/ORIWISH-OW01-Canonical-Product-Source-v0.1.md`](sources/ORIWISH-OW01-Canonical-Product-Source-v0.1.md).
 That document is now the SOURCE-CONFIRMED evidence base for this profile.
 
+**P8-D4.1a** added one more piece of evidence to that same document: the
+original **Product Image 1 bilingual heading** — a 4-line, word-for-word
+aligned Chinese/Japanese tag list (和風圖案長夾/和柄長財布, 櫻花 金襴織/桜
+金襴織, 高雅 輕量 共10色/上品 軽量 全10色, ORIWISH/ORIWISH). Because it is a
+tag list rather than a creative sentence, each line's terms can be read as
+direct, unambiguous pairwise evidence — this is what newly confirmed bare
+櫻花→桜, 輕量→軽量, and 共10色→全10色.
+
 **`PRODUCT-NR-001_夜薔薇網紗長錢包_黑` remains ungrounded.** Its historical
 existence is acknowledged, but no canonical product text for it is
 available — see Section 10.
@@ -62,11 +78,11 @@ available — see Section 10.
 ## 4. Provenance classes
 
 - **A — SOURCE-CONFIRMED**: directly evidenced by OW_01 or the
-  owner-verified bilingual copy (Section 3). *(19 of 29 active glossary
-  groups.)*
+  owner-verified bilingual copy (Section 3). *(22 of 30 active glossary
+  groups, after P8-D4.1a's 2 reclassifications + 1 new entry.)*
 - **B — GENERIC-EC**: generic but standard Japanese EC/textile
   terminology, directly applicable to the product domain, but not
-  directly evidenced by the current source set. *(10 of 29 active
+  directly evidenced by the current source set. *(8 of 30 active
   glossary groups; also the current classification of the `ORIWISH`
   protected term's *general use as a brand name*, though the string
   itself is obviously brand-confirmed.)*
@@ -84,9 +100,9 @@ this project's original v0.1 guess, were deliberately NOT promoted (see
 per-term notes in Section 5) — promotion required confirmation, not mere
 plausibility.
 
-## 5. Active glossary (29 groups, 33 source aliases)
+## 5. Active glossary (30 groups, 34 source aliases)
 
-### 5a. SOURCE-CONFIRMED (Class A) — 19 groups
+### 5a. SOURCE-CONFIRMED (Class A) — 22 groups
 
 | Source term(s) | Japanese canonical | Category | Evidence |
 |---|---|---|---|
@@ -109,14 +125,15 @@ plausibility.
 | 布料 | 布地 | textile-pattern | Bilingual pair #18 (exact) — **corrects** this project's original v0.1 guess of 生地 |
 | 購買前請確認 | ご購入前にご確認ください | ec-copy | Bilingual pair #17 (exact) |
 | 共10色可選 | 全10色から選べる | gift-lifestyle | Bilingual pair #14 (exact). **SKU-specific literal, not a general "共N色" pattern** — see the note in Section 5c and in the code comment above this entry. |
+| 櫻花 / 桜 | 桜 | textile-pattern | **P8-D4.1a.** Product Image 1 heading line 2 (櫻花 金襴織 ↔ 桜 金襴織) — word-for-word tag pairing, reclassified from GENERIC-EC. No runtime data change (entry already existed). |
+| 輕量 / 軽量 | 軽量 | characteristics | **P8-D4.1a.** Product Image 1 heading line 3 (高雅 輕量 共10色 ↔ 上品 軽量 全10色) — word-for-word tag pairing, reclassified from GENERIC-EC. No runtime data change (entry already existed). |
+| 共10色 | 全10色 | gift-lifestyle | **P8-D4.1a, new entry.** Product Image 1 heading line 3, bare tag form — kept as a separate SKU-specific literal from 共10色可選→全10色から選べる above, not a general "共N色" pattern. |
 
-### 5b. GENERIC-EC (Class B) — 10 groups
+### 5b. GENERIC-EC (Class B) — 8 groups
 
 | Source term(s) | Japanese canonical | Category | Note |
 |---|---|---|---|
 | 收納包 | 収納ポーチ | product-type | "收納包" as a noun never appears in the source (only "收納" + "包包" separately) |
-| 櫻花 / 桜 | 桜 | textile-pattern | Bare form appears only as a product-name tag; only the compound 櫻花圖案→桜柄 has direct bilingual confirmation |
-| 輕量 / 軽量 | 軽量 | characteristics | Appears only as a product-name tag with no accompanying Japanese; the source's actual sentences for this concept (輕巧/輕鬆) were rendered evocatively (軽やかさ/持ち運びしやすい), not literally — kept safe/generic rather than promoted |
 | 禮品 | ギフト | gift-lifestyle | ギフト as a target is contextually supported (bilingual pair #13), but the source word "禮品" itself is never used — OW_01 uses 禮物 |
 | 商品說明 | 商品説明 | ec-copy | Not used verbatim in the source; standard EC label |
 | 商品特色 | 商品の特徴 | ec-copy | Not used verbatim in the source; standard EC label |
@@ -134,12 +151,13 @@ conflicting entries fail closed at profile-load time.
 
 **Deliberately excluded from the static glossary as a general pattern:**
 variable-count phrases such as 共N色/全N色. An exact-lexical entry can
-only ever encode one literal N. The one entry that IS active
-(共10色可選 → 全10色から選べる) is a **SKU-specific literal convenience
-entry** justified because it matches OW_01's own confirmed color count
-exactly (共10色) — it is not a stand-in for "any color count." A different
-SKU's color count simply won't match this entry and falls through to
-ordinary translation, still covered by the profile-independent
+only ever encode one literal N. The two entries that ARE active
+(共10色可選 → 全10色から選べる, and 共10色 → 全10色 added in P8-D4.1a) are
+**SKU-specific literal convenience entries** justified because they match
+OW_01's own confirmed color count exactly (共10色) — neither is a stand-in
+for "any color count." A different SKU's color count simply won't match
+either entry and falls through to ordinary translation, still covered by
+the profile-independent
 `COMMON_TRANSLATION_RULES` numeric-preservation rule ("日期、單位、價格、
 百分比等數值資訊必須原樣保留"). Full caution/disclaimer sentences (screen/
 lighting color variance, fabric cut-position pattern variance) are handled
@@ -210,7 +228,7 @@ about how any specific ORIWISH product is actually made.
 | 錦布 | Multiple reasonable Japanese equivalents (錦, 錦織, 唐錦); risk of implying unconfirmed Nishijin-specific provenance if rendered too specifically |
 | 網紗 | Multiple reasonable renderings (メッシュ, レース, チュール); appears only in the still-ungrounded `PRODUCT-NR-001` filename — see Section 10 |
 | 紋樣 | Overlaps with already-covered 圖案/柄 mappings (和柄, 桜柄); standalone rendering (紋様 vs 柄) is too context-dependent to fix as one canonical target |
-| 共N色 / 全N色 as a general pattern | Exact-lexical glossary cannot safely encode a variable digit; see Section 5c. (The one SKU-specific literal, 共10色可選, IS active — see Section 5a.) |
+| 共N色 / 全N色 as a general pattern | Exact-lexical glossary cannot safely encode a variable digit; see Section 5c. (The two SKU-specific literals, 共10色可選 and 共10色, ARE active — see Section 5a.) |
 | 拍攝光線, 裁切位置, 手工測量 | Fragments of caution/disclaimer clauses; too context-dependent as standalone terms — handled as ordinary prose under factual-preservation, not glossary entries |
 | 夜薔薇, 網紗 (from `PRODUCT-NR-001_夜薔薇網紗長錢包_黑`) | No canonical product text exists to confirm meaning or canonical rendering — see Section 10 |
 
@@ -256,6 +274,18 @@ rather than guessed at. No PRODUCT-NR-001-specific benchmark was added.
     色合い target) is additive/PATCH-or-MINOR on its own and would not
     have required a bump alone — but one breaking change in a batch is
     enough to require bumping the whole batch once, not per-entry.
+  - `"4"` — **P8-D4.1a.** A newly-supplied Product Image 1 bilingual
+    heading directly confirmed 3 borderline terms. Two of them (櫻花→桜,
+    輕量→軽量) were ALREADY active runtime entries under GENERIC-EC —
+    reclassifying their provenance label is a documentation/comment-only
+    change and, per this task's own explicit instruction, does NOT by
+    itself justify a version bump. The third (共10色→全10色, a new bare-tag
+    literal distinct from the existing 共10色可選→全10色から選べる) IS a new
+    runtime glossary entry — a MINOR change ("new terminology group
+    added") that DOES materially change what the rendered prompt
+    instructs. That one new entry is the sole reason for this bump; the
+    two reclassifications travel with it but are not themselves the
+    cause.
 
 PATCH/MINOR/BREAKING definitions are unchanged from P8-D4:
 - **PATCH**: typo fix; adding a new non-conflicting glossary alias to an
@@ -278,10 +308,11 @@ None require one exact whole-sentence translation for PASS — they
 validate terminology consistency, factual preservation, and register (per
 Section L's instruction).
 
-**A — Product identity (REAL / SOURCE-DERIVED, OW_01 identity string):**
-`ORIWISH 和風圖案長夾 櫻花 金襴織 高雅 輕量 共10色` → expect ORIWISH
-preserved; 和柄/長財布/桜柄-family, 金襴織, 上品 terminology consistent;
-Japanese EC register; no new facts.
+**A — Product identity (REAL / SOURCE-DERIVED, OW_01 identity string /
+Product Image 1 heading):** `ORIWISH 和風圖案長夾 櫻花 金襴織 高雅 輕量 共10色`
+→ expect ORIWISH preserved; 和柄/長財布, 桜, 金襴織, 上品, 軽量 terminology
+consistent (all now SOURCE-CONFIRMED per P8-D4.1a); the bare 共10色→全10色
+mapping applies too; Japanese EC register; no new facts.
 
 **B — Size and weight (REAL / SOURCE-DERIVED, OW_01 confirmed
 attributes):** `本體：約19 × 10 × 1.8cm` / `重量：約300g` → expect every

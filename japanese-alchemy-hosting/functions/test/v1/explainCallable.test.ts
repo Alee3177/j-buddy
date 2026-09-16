@@ -398,7 +398,7 @@ describe("explainHandler", () => {
 
       expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt("business", oriwishProfile));
       expect(result.preStage?.translationProfileId).toBe(ORIWISH_PROFILE_ID);
-      expect(result.preStage?.translationProfileVersion).toBe("3");
+      expect(result.preStage?.translationProfileVersion).toBe("4");
     });
 
     it("an unknown translationProfileId is rejected cleanly before any LLM call", async () => {

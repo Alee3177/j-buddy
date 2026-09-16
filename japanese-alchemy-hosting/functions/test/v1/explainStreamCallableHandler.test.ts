@@ -558,7 +558,7 @@ describe("explainStreamCallableHandler", () => {
       );
       const [preStageChunk] = preStageChunkCalls[0] as [any];
       expect(preStageChunk.preStage.translationProfileId).toBe(ORIWISH_PROFILE_ID);
-      expect(preStageChunk.preStage.translationProfileVersion).toBe("3");
+      expect(preStageChunk.preStage.translationProfileVersion).toBe("4");
       const serialized = JSON.stringify(preStageChunk);
       expect(serialized).not.toContain("terminologyGlossary");
       expect(serialized).not.toContain("protectedTerms");

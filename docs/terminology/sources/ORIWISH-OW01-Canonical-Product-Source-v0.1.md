@@ -1,16 +1,17 @@
 ---
 module: functions/models/translationProfile
 problem_type: terminology-source-grounding
-tags: [p8-d4-1, oriwish, oriwish_01, canonical-source]
+tags: [p8-d4-1, p8-d4-1a, oriwish, oriwish_01, canonical-source]
 ---
 
 # ORIWISH OW_01 — Canonical Product Source v0.1
 
 **Source status:** OWNER-VERIFIED / SOURCE-DERIVED
-**Date added to repository governance:** 2026-09-16 (P8-D4.1)
-**Supplied by:** project owner (ezgod777@gmail.com), directly in the P8-D4.1
-task specification — not discovered by repo search. No file of this
-content existed in the repository before this date.
+**Date added to repository governance:** 2026-09-16 (P8-D4.1; Product Image 1
+heading added P8-D4.1a, same date)
+**Supplied by:** project owner (ezgod777@gmail.com), directly in the
+P8-D4.1 and P8-D4.1a task specifications — not discovered by repo search.
+No file of this content existed in the repository before these dates.
 
 This document is the canonical, verbatim record of the one piece of real
 ORIWISH product/content material available to this project as of P8-D4.1.
@@ -31,6 +32,31 @@ the runtime profile.
 ## Product identity (Chinese, verbatim)
 
 > 和風圖案長夾 櫻花 金襴織 高雅 輕量 共10色
+
+## Product Image 1 — bilingual heading (P8-D4.1a, verbatim, line-aligned)
+
+This is a separate, directly-aligned bilingual rendering of the product
+identity above, supplied as the original Product Image 1 heading. Unlike a
+full creative sentence, this is a word-for-word tag list, so each line's
+Chinese and Japanese terms can be read as directly paired evidence:
+
+| Line | Chinese (verbatim) | Japanese (verbatim) |
+|---|---|---|
+| 1 | 和風圖案長夾 | 和柄長財布 |
+| 2 | 櫻花 金襴織 | 桜 金襴織 |
+| 3 | 高雅 輕量 共10色 | 上品 軽量 全10色 |
+| 4 | ORIWISH | ORIWISH |
+
+This heading is the direct evidence for three P8-D4.1a reclassifications/
+additions that the original 18-pair bilingual copy set (Section further
+below) did not directly support on their own:
+- **櫻花 → 桜** (line 2, bare form paired word-for-word — previously only
+  the compound 櫻花圖案→桜柄 had direct evidence)
+- **輕量 → 軽量** (line 3, bare form paired word-for-word — previously only
+  appeared as an unpaired Chinese-only tag)
+- **共10色 → 全10色** (line 3, bare form, distinct from the already-confirmed
+  sentence form 共10色可選 → 全10色から選べる — see the bilingual pairs list
+  below)
 
 ## Product description (Chinese, verbatim)
 
@@ -105,11 +131,13 @@ promote — see the governance doc's Section 5 evidence notes):
 - Pair 18 renders 布料 as **布地**, not 生地 (this project's original v0.1
   guess) — the glossary's 布料 target was corrected to 布地 to match this
   owner-verified wording.
-- Pairs 10/11 show 輕量-adjacent concepts (輕巧/輕鬆) rendered as evocative
-  phrases (軽やかさ / 持ち運びしやすい), never as the literal 軽量 — bare
-  輕量 (which appears only as a product-name tag, never in a full
-  sentence with an approved translation) was therefore kept GENERIC-EC,
-  not promoted to SOURCE-CONFIRMED.
+- Pairs 10/11 show 輕量-*adjacent* concepts (輕巧/輕鬆, different words) in
+  full sentences rendered as evocative phrases (軽やかさ / 持ち運びしやすい).
+  This did NOT, on its own, confirm bare 輕量 → 軽量 — that direct
+  word-for-word confirmation came separately from the Product Image 1
+  heading above (P8-D4.1a), which is why 輕量 was reclassified to
+  SOURCE-CONFIRMED only after that heading was supplied, not from pairs
+  10/11 alone.
 
 ## Source boundary / prohibited inference
 

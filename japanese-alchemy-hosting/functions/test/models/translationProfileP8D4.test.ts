@@ -75,8 +75,8 @@ describe("P8-D4: profile immutability and versioning", () => {
     expect(Object.isFrozen(profile.brandVoice)).toBe(true);
   });
 
-  it("returns the correct v0.1 version string (bumped 2 -> 3 by P8-D4.1 source grounding)", () => {
-    expect(profile.version).toBe("3");
+  it("returns the correct v0.1 version string (bumped 2 -> 3 -> 4 by P8-D4.1/P8-D4.1a source grounding)", () => {
+    expect(profile.version).toBe("4");
   });
 });
 
@@ -103,21 +103,23 @@ describe("P8-D4: factual-preservation rules remain dominant; dimensions/weights/
     expect(prompt.indexOf("術語對照表")).toBeLessThan(prompt.indexOf("品牌語氣調整"));
   });
 
-  it("no numeral-bearing literal entry exists EXCEPT the one P8-D4.1 SKU-specific exception", () => {
+  it("no numeral-bearing literal entry exists EXCEPT the two P8-D4.1/P8-D4.1a SKU-specific exceptions", () => {
     // Variable counts (共N色/全N色) are deliberately NOT a static glossary
     // PATTERN — an exact-lexical entry could only ever match one specific
-    // N, which would silently mistranslate every other count. The single
-    // exception (共10色可選 → 全10色から選べる) is a literal convenience
-    // entry justified because it matches OW_01's own confirmed color count
-    // exactly (P8-D4.1 grounding) — it is not a stand-in for arbitrary N.
-    // Any other count still falls through to the profile-independent
-    // numeric-preservation rule, not to this glossary entry.
+    // N, which would silently mistranslate every other count. Both
+    // exceptions (共10色可選 → 全10色から選べる, 共10色 → 全10色) are literal
+    // convenience entries justified because they match OW_01's own
+    // confirmed color count exactly — neither is a stand-in for arbitrary
+    // N. Any other count still falls through to the profile-independent
+    // numeric-preservation rule, not to either glossary entry.
     const numeralEntries = profile.terminologyGlossary.filter(
       (entry) => /[0-9]/.test(entry.target) || entry.sourceTerms.some((s) => /[0-9]/.test(s))
     );
-    expect(numeralEntries).toHaveLength(1);
-    expect(numeralEntries[0].sourceTerms).toEqual(["共10色可選"]);
-    expect(numeralEntries[0].target).toBe("全10色から選べる");
+    const bySource = Object.fromEntries(numeralEntries.map((e) => [e.sourceTerms.join(","), e.target]));
+    expect(bySource).toEqual({
+      共10色可選: "全10色から選べる",
+      共10色: "全10色",
+    });
   });
 });
 
@@ -187,20 +189,23 @@ describe("P8-D4: benchmark cases (Section L) — terminology + facts + register,
     expect(profile.terminologyGlossary.some((e) => e.target === "商品サイズ")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.target === "サイズ")).toBe(true);
     // Dimensions (19x10x1.8cm) and weight (300g) are never glossary
-    // literals — only the color-count SKU exception (see P8-D4.1 test)
-    // carries a digit.
+    // literals — only the two color-count SKU exceptions (see the
+    // dedicated numeral-entries test above) carry a digit.
+    const numeralTargets = new Set(["全10色から選べる", "全10色"]);
     for (const entry of profile.terminologyGlossary) {
-      if (entry.target === "全10色から選べる") continue;
+      if (numeralTargets.has(entry.target)) continue;
       expect(/[0-9]/.test(entry.target)).toBe(false);
     }
   });
 
-  it("Benchmark 4 (REAL/SOURCE-DERIVED, P8-D4.1): gift/color-selection vocabulary is present, including OW_01's confirmed 10-color count", () => {
+  it("Benchmark 4 (REAL/SOURCE-DERIVED, P8-D4.1/P8-D4.1a): gift/color-selection vocabulary is present, including OW_01's confirmed 10-color count in both bare and 可選 form", () => {
     expect(profile.terminologyGlossary.some((e) => e.target === "贈り物")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.target === "ギフト")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.target === "カラー")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.sourceTerms.includes("共10色可選"))).toBe(true);
-    expect(profile.terminologyGlossary.some((e) => e.sourceTerms.includes("共10色"))).toBe(false);
+    // P8-D4.1a: promoted — the Product Image 1 bilingual heading directly
+    // confirms bare 共10色 -> 全10色 (word-for-word tag list, not a sentence).
+    expect(profile.terminologyGlossary.some((e) => e.sourceTerms.includes("共10色"))).toBe(true);
   });
 
   it("Benchmark 5 (GENERIC EC EXAMPLE): caution/disclaimer register terms exist without asserting a fixed disclaimer sentence", () => {

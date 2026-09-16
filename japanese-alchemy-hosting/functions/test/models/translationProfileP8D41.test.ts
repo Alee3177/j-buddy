@@ -35,10 +35,15 @@ const SOURCE_CONFIRMED_TARGETS = [
   "布地",
   "ご購入前にご確認ください",
   "全10色から選べる",
+  // P8-D4.1a additions: reclassified/newly added against the Product
+  // Image 1 bilingual heading.
+  "桜",
+  "軽量",
+  "全10色",
 ];
 
-describe("P8-D4.1: source-confirmed mappings", () => {
-  it("all 19 SOURCE-CONFIRMED targets from the grounding pass are present", () => {
+describe("P8-D4.1/P8-D4.1a: source-confirmed mappings", () => {
+  it("all 22 SOURCE-CONFIRMED targets from the grounding passes are present", () => {
     const targets = profile.terminologyGlossary.map((e) => e.target);
     for (const target of SOURCE_CONFIRMED_TARGETS) {
       expect(targets).toContain(target);
@@ -108,12 +113,12 @@ describe("P8-D4.1: benchmarks A-D are REAL/SOURCE-DERIVED from OW_01", () => {
   it("Benchmark B — size and weight: dimensions/weight preserved exactly, no glossary literal for them", () => {
     // 本體：約19 × 10 × 1.8cm / 重量：約300g — these are handled entirely by
     // the profile-independent numeric-preservation rule, never by a
-    // glossary entry. Only the color-count SKU exception carries a digit.
+    // glossary entry. Only the two color-count SKU exceptions carry a digit.
     const numeralEntries = profile.terminologyGlossary.filter(
       (e) => /[0-9]/.test(e.target) || e.sourceTerms.some((s) => /[0-9]/.test(s))
     );
-    expect(numeralEntries).toHaveLength(1);
-    expect(numeralEntries[0].target).toBe("全10色から選べる");
+    const numeralTargets = numeralEntries.map((e) => e.target).sort();
+    expect(numeralTargets).toEqual(["全10色", "全10色から選べる"]);
     expect(businessPrompt).toContain("日期、單位、價格、百分比等數值資訊必須原樣保留");
   });
 
@@ -152,9 +157,34 @@ describe("P8-D4.1: no industrial fixture leakage after re-grounding", () => {
   });
 });
 
-describe("P8-D4.1: version decision", () => {
-  it("version is 3 (bumped from 2: 布料 target corrected + 光澤 removed — both materially change output)", () => {
-    expect(profile.version).toBe("3");
+describe("P8-D4.1a: source classification correction (Product Image 1 bilingual heading)", () => {
+  it("櫻花 -> 桜 is now SOURCE-CONFIRMED (already an active runtime entry; reclassification only, no data change)", () => {
+    const entry = profile.terminologyGlossary.find((e) => e.target === "桜")!;
+    expect(entry.sourceTerms).toEqual(["櫻花", "桜"]);
+  });
+
+  it("輕量 -> 軽量 is now SOURCE-CONFIRMED (already an active runtime entry; reclassification only, no data change)", () => {
+    const entry = profile.terminologyGlossary.find((e) => e.target === "軽量")!;
+    expect(entry.sourceTerms).toEqual(["輕量", "軽量"]);
+  });
+
+  it("共10色 -> 全10色 is a NEW runtime entry, kept separate from 共10色可選 -> 全10色から選べる", () => {
+    const bare = profile.terminologyGlossary.find((e) => e.sourceTerms.includes("共10色") && !e.sourceTerms.includes("共10色可選"));
+    const phrase = profile.terminologyGlossary.find((e) => e.sourceTerms.includes("共10色可選"));
+    expect(bare?.target).toBe("全10色");
+    expect(phrase?.target).toBe("全10色から選べる");
+  });
+
+  it("共10色可選 still sorts ahead of bare 共10色 in the rendered prompt (longest-match-first)", () => {
+    const glossaryBlock = businessPrompt.split("【術語對照表】")[1].split("【受保護用詞】")[0];
+    expect(glossaryBlock.indexOf("共10色可選")).toBeGreaterThanOrEqual(0);
+    expect(glossaryBlock.indexOf("共10色可選")).toBeLessThan(glossaryBlock.indexOf("共10色 →"));
+  });
+});
+
+describe("P8-D4.1/P8-D4.1a: version decision", () => {
+  it("version is 4 (3 -> 4: adding the new 共10色 -> 全10色 runtime entry materially changes output; the 櫻花/輕量 reclassifications alone would not have required a bump)", () => {
+    expect(profile.version).toBe("4");
   });
 
   it("id remains oriwish-ja-business-v1 (unchanged, avoids orphaning P8-D3-persisted references)", () => {

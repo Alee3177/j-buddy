@@ -45,7 +45,7 @@ describe("resolveTranslationProfile", () => {
 
     expect(profile).toBeDefined();
     expect(profile?.id).toBe("oriwish-ja-business-v1");
-    expect(profile?.version).toBe("3");
+    expect(profile?.version).toBe("4");
     expect(Object.isFrozen(profile)).toBe(true);
     expect(Object.isFrozen(profile?.terminologyGlossary)).toBe(true);
     expect(Object.isFrozen(profile?.protectedTerms)).toBe(true);
@@ -82,7 +82,7 @@ describe("the oriwish-ja-business-v1 (P8-D4.1 grounded v0.1) profile contents", 
     expect(profile.protectedTerms).not.toContain("ISO 9001");
   });
 
-  it("maps the P8-D4.1 source-confirmed OW_01 glossary terms", () => {
+  it("maps the P8-D4.1/P8-D4.1a source-confirmed OW_01 glossary terms", () => {
     const bySource = Object.fromEntries(
       profile.terminologyGlossary.map((entry) => [entry.sourceTerms[0], entry.target])
     );
@@ -99,6 +99,13 @@ describe("the oriwish-ja-business-v1 (P8-D4.1 grounded v0.1) profile contents", 
       色調: "色合い",
       尺寸: "サイズ",
       共10色可選: "全10色から選べる",
+      // P8-D4.1a: reclassified from GENERIC-EC (Product Image 1 bilingual
+      // heading directly confirms these bare-term mappings).
+      櫻花: "桜",
+      輕量: "軽量",
+      // P8-D4.1a: newly added — direct evidence for the bare tag form,
+      // kept distinct from 共10色可選 -> 全10色から選べる above.
+      共10色: "全10色",
     });
   });
 
@@ -108,8 +115,6 @@ describe("the oriwish-ja-business-v1 (P8-D4.1 grounded v0.1) profile contents", 
     );
     expect(bySource).toMatchObject({
       收納包: "収納ポーチ",
-      櫻花: "桜",
-      輕量: "軽量",
       禮品: "ギフト",
       商品尺寸: "商品サイズ",
       素材: "素材",

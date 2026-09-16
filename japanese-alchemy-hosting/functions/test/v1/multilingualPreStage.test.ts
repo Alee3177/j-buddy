@@ -203,7 +203,7 @@ describe("runMultilingualPreStage", () => {
         "这是一个测试"
       );
       expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
-      expect(result.translationProfileVersion).toBe("3");
+      expect(result.translationProfileVersion).toBe("4");
     });
 
     it("en + profile: profile applies the same way regardless of source language", async () => {

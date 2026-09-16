@@ -18,8 +18,14 @@
  *     set (version bumped 1 -> 2); P8-D4.1 grounded that content against
  *     verified ORIWISH source material, correcting one target (布料) and
  *     removing one contextually-ambiguous entry (光澤) — both materially
- *     change runtime translation output, so version bumped 2 -> 3. See the
- *     profile definition below and
+ *     change runtime translation output, so version bumped 2 -> 3. P8-D4.1a
+ *     re-audited 3 borderline terms against a newly-supplied Product Image 1
+ *     bilingual heading: reclassified 櫻花/桜 and 輕量/軽量 from GENERIC-EC to
+ *     SOURCE-CONFIRMED (no runtime change, doc/comment-only), and added one
+ *     new SKU-specific literal entry (共10色 -> 全10色, distinct from the
+ *     existing 共10色可選 -> 全10色から選べる) since that IS directly
+ *     evidenced now — the new entry is a runtime change, so version bumped
+ *     3 -> 4. See the profile definition below and
  *     docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md.
  */
 
@@ -201,7 +207,7 @@ function defineProfile(profile: TranslationProfile): TranslationProfile {
 // source text does not state (Section H).
 const ORIWISH_JA_BUSINESS_V1 = defineProfile({
   id: "oriwish-ja-business-v1",
-  version: "3",
+  version: "4",
   protectedTerms: ["ORIWISH"],
   terminologyGlossary: [
     // --- SOURCE-CONFIRMED (Class A) ---------------------------------
@@ -223,17 +229,24 @@ const ORIWISH_JA_BUSINESS_V1 = defineProfile({
     { sourceTerms: ["尺寸"], target: "サイズ" },
     { sourceTerms: ["布料"], target: "布地" },
     { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください" },
-    // SKU-specific literal (matches OW_01's confirmed 共10色 color count
-    // exactly) — NOT a general "共N色" pattern. A different color count on
-    // a different SKU simply won't match this entry and falls through to
+    // SKU-specific literals (both match OW_01's confirmed 共10色 color
+    // count exactly, per the Product Image 1 bilingual heading — P8-D4.1a)
+    // — NOT a general "共N色" pattern. A different color count on a
+    // different SKU simply won't match either entry and falls through to
     // ordinary translation, still covered by the numeric-preservation rule
     // in COMMON_TRANSLATION_RULES.
     { sourceTerms: ["共10色可選"], target: "全10色から選べる" },
+    { sourceTerms: ["共10色"], target: "全10色" },
+    // P8-D4.1a: promoted from GENERIC-EC — the Product Image 1 bilingual
+    // heading (和柄長財布 / 桜 金襴織 / 上品 軽量 全10色 / ORIWISH ↔
+    // 和風圖案長夾 / 櫻花 金襴織 / 高雅 輕量 共10色 / ORIWISH) is a
+    // word-for-word aligned tag list, not a creative full sentence, so it
+    // directly confirms these two bare-term mappings.
+    { sourceTerms: ["櫻花", "桜"], target: "桜" },
+    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
 
     // --- GENERIC-EC (Class B) ---------------------------------------
     { sourceTerms: ["收納包"], target: "収納ポーチ" },
-    { sourceTerms: ["櫻花", "桜"], target: "桜" },
-    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
     { sourceTerms: ["禮品"], target: "ギフト" },
     { sourceTerms: ["商品說明"], target: "商品説明" },
     { sourceTerms: ["商品特色"], target: "商品の特徴" },
