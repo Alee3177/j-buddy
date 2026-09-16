@@ -45,7 +45,7 @@ describe("resolveTranslationProfile", () => {
 
     expect(profile).toBeDefined();
     expect(profile?.id).toBe("oriwish-ja-business-v1");
-    expect(profile?.version).toBe("1");
+    expect(profile?.version).toBe("2");
     expect(Object.isFrozen(profile)).toBe(true);
     expect(Object.isFrozen(profile?.terminologyGlossary)).toBe(true);
     expect(Object.isFrozen(profile?.protectedTerms)).toBe(true);
@@ -73,25 +73,42 @@ describe("resolveTranslationProfile", () => {
   });
 });
 
-describe("the oriwish-ja-business-v1 sample profile contents", () => {
+describe("the oriwish-ja-business-v1 (P8-D4 v0.1) profile contents", () => {
   const profile = resolveTranslationProfile("oriwish-ja-business-v1")!;
 
-  it("protects exactly the specified sample terms", () => {
-    expect(profile.protectedTerms).toEqual(["ORIWISH", "XYZ-300", "ISO 9001"]);
+  it("protects exactly ORIWISH — the P8-D2 industrial fixture identifiers are gone", () => {
+    expect(profile.protectedTerms).toEqual(["ORIWISH"]);
+    expect(profile.protectedTerms).not.toContain("XYZ-300");
+    expect(profile.protectedTerms).not.toContain("ISO 9001");
   });
 
-  it("maps exactly the specified sample glossary terms", () => {
+  it("maps the P8-D4 lifestyle/EC glossary terms", () => {
     const bySource = Object.fromEntries(
       profile.terminologyGlossary.map((entry) => [entry.sourceTerms[0], entry.target])
     );
-    expect(bySource).toEqual({
-      精密滑台: "精密ステージ",
-      直線模組: "リニアモジュール",
-      線性滑軌: "リニアガイド",
+    expect(bySource).toMatchObject({
+      長夾: "長財布",
+      和風圖案: "和柄",
+      櫻花圖案: "桜柄",
+      櫻花: "桜",
+      金襴織: "金襴織",
+      西陣織: "西陣織",
+      布料: "生地",
+      高雅: "上品",
+      輕量: "軽量",
     });
   });
 
-  it("has no overlap between protectedTerms and glossary source terms (no conflict in the shipped sample)", () => {
+  it("contains no P8-D2 industrial-automation terminology", () => {
+    const allSources = profile.terminologyGlossary.flatMap((e) => e.sourceTerms);
+    const allTargets = profile.terminologyGlossary.map((e) => e.target);
+    for (const industrialTerm of ["精密滑台", "直線模組", "線性滑軌", "精密ステージ", "リニアモジュール", "リニアガイド"]) {
+      expect(allSources).not.toContain(industrialTerm);
+      expect(allTargets).not.toContain(industrialTerm);
+    }
+  });
+
+  it("has no overlap between protectedTerms and glossary source terms (no conflict)", () => {
     const glossarySources = new Set(profile.terminologyGlossary.flatMap((e) => e.sourceTerms));
     for (const term of profile.protectedTerms) {
       expect(glossarySources.has(term)).toBe(false);
@@ -103,13 +120,40 @@ describe("the oriwish-ja-business-v1 sample profile contents", () => {
     expect(profile.brandVoice.description.length).toBeGreaterThan(0);
   });
 
-  it("never claims to be a real ORIWISH product/certification dataset (test-fixture only, per spec)", () => {
-    // XYZ-300 is explicitly a test fixture, not a real product — this is a
-    // documentation-level guard, not a runtime behavior check: the profile
-    // module's own comments say so; this test just anchors that the sample
-    // stays exactly the small fixture set given in the spec.
-    expect(profile.protectedTerms).toHaveLength(3);
-    expect(profile.terminologyGlossary).toHaveLength(3);
+  it("brand voice forbids inventing material/origin/certification/handcraft/award/durability claims", () => {
+    expect(profile.brandVoice.description).toContain("材質");
+    expect(profile.brandVoice.description).toContain("產地");
+    expect(profile.brandVoice.description).toContain("認證");
+    expect(profile.brandVoice.description).toContain("手工製作");
+    expect(profile.brandVoice.description).toContain("獎項");
+  });
+
+  it("stays within the v0.1 target size (20-40 terminology mappings)", () => {
+    expect(profile.terminologyGlossary.length).toBeGreaterThanOrEqual(20);
+    expect(profile.terminologyGlossary.length).toBeLessThanOrEqual(40);
+  });
+
+  it("longest-match: 櫻花圖案 (longer) sorts ahead of 櫻花 (shorter) in the rendered glossary", () => {
+    const sorted = [...profile.terminologyGlossary].sort((a, b) => {
+      const aMax = Math.max(...a.sourceTerms.map((s) => s.length));
+      const bMax = Math.max(...b.sourceTerms.map((s) => s.length));
+      return bMax - aMax;
+    });
+    const sakuraPatternIndex = sorted.findIndex((e) => e.sourceTerms.includes("櫻花圖案"));
+    const sakuraIndex = sorted.findIndex((e) => e.sourceTerms.includes("櫻花"));
+    expect(sakuraPatternIndex).toBeGreaterThanOrEqual(0);
+    expect(sakuraIndex).toBeGreaterThanOrEqual(0);
+    expect(sakuraPatternIndex).toBeLessThan(sakuraIndex);
+  });
+
+  it("has no duplicate/conflicting source terms across glossary groups", () => {
+    const seen = new Map<string, string>();
+    for (const entry of profile.terminologyGlossary) {
+      for (const source of entry.sourceTerms) {
+        expect(seen.has(source)).toBe(false);
+        seen.set(source, entry.target);
+      }
+    }
   });
 });
 

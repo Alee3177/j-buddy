@@ -85,13 +85,12 @@ describe("buildTranslationSystemPrompt", () => {
       const prompt = buildTranslationSystemPrompt("business", oriwishProfile);
 
       expect(prompt).toContain("【術語對照表】");
-      expect(prompt).toContain("精密滑台 → 精密ステージ");
-      expect(prompt).toContain("直線模組 → リニアモジュール");
-      expect(prompt).toContain("線性滑軌 → リニアガイド");
+      expect(prompt).toContain("和風圖案 / 和柄 → 和柄");
+      expect(prompt).toContain("高雅 / 上品 → 上品");
       expect(prompt).toContain("【受保護用詞】");
       expect(prompt).toContain("- ORIWISH");
-      expect(prompt).toContain("- XYZ-300");
-      expect(prompt).toContain("- ISO 9001");
+      expect(prompt).not.toContain("- XYZ-300");
+      expect(prompt).not.toContain("- ISO 9001");
     });
 
     it("frames the hard-constraint block as taking priority over style/brand-voice", () => {
@@ -130,8 +129,12 @@ describe("buildTranslationSystemPrompt", () => {
       const glossaryBlock = prompt.split("【術語對照表】")[1].split("【受保護用詞】")[0];
       const lines = glossaryBlock.split("\n").filter((l) => l.startsWith("- "));
       const lengths = lines.map((l) => {
+        // Sort key is each entry's LONGEST individual alias, not the
+        // joined " / "-separated display string's total length (P8-D4
+        // introduced multi-alias entries, e.g. "長夾 / 長錢包 / 長財布").
         const source = l.replace(/^- /, "").split(" → ")[0];
-        return source.length;
+        const aliases = source.split(" / ");
+        return Math.max(...aliases.map((a) => a.length));
       });
       const sorted = [...lengths].sort((a, b) => b - a);
       expect(lengths).toEqual(sorted);

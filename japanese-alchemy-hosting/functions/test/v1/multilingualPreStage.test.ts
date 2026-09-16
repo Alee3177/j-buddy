@@ -203,7 +203,7 @@ describe("runMultilingualPreStage", () => {
         "这是一个测试"
       );
       expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
-      expect(result.translationProfileVersion).toBe("1");
+      expect(result.translationProfileVersion).toBe("2");
     });
 
     it("en + profile: profile applies the same way regardless of source language", async () => {
@@ -264,15 +264,15 @@ describe("runMultilingualPreStage", () => {
     });
   });
 
-  describe("P8-D2 sample test input (Section N)", () => {
-    const sampleSource = "ORIWISH XYZ-300 精密滑台採用線性滑軌，\n適用於自動化設備中的精密定位。\n符合 ISO 9001。";
+  describe("P8-D4 real ORIWISH lifestyle/EC sample test input (Section N)", () => {
+    const sampleSource = "ORIWISH 和風圖案長夾採用金襴織與西陣織的布料，展現高雅又輕量的日式質感。";
 
     it("the constructed prompt instructs preservation of every protected term and glossary mapping for the sample sentence", async () => {
       const chatCompletion = jest.fn() as any;
       chatCompletion.mockResolvedValue({
         response: {
           success: true,
-          data: "ORIWISH XYZ-300 精密ステージはリニアガイドを採用し、自動化設備における精密位置決めに適しています。ISO 9001に準拠。",
+          data: "ORIWISHの和柄長財布は金襴織と西陣織の生地を使用し、上品で軽量な和の質感を纏っています。",
         },
       });
 
@@ -281,10 +281,12 @@ describe("runMultilingualPreStage", () => {
       const [sentPrompt, sentContent] = chatCompletion.mock.calls[0];
       expect(sentContent).toBe(sampleSource);
       expect(sentPrompt).toContain("- ORIWISH");
-      expect(sentPrompt).toContain("- XYZ-300");
-      expect(sentPrompt).toContain("- ISO 9001");
-      expect(sentPrompt).toContain("精密滑台 → 精密ステージ");
-      expect(sentPrompt).toContain("線性滑軌 → リニアガイド");
+      expect(sentPrompt).toContain("和風圖案 / 和柄 → 和柄");
+      expect(sentPrompt).toContain("金襴織 → 金襴織");
+      expect(sentPrompt).toContain("西陣織 → 西陣織");
+      expect(sentPrompt).toContain("布料 → 生地");
+      expect(sentPrompt).toContain("高雅 / 上品 → 上品");
+      expect(sentPrompt).toContain("輕量 / 軽量 → 軽量");
     });
   });
 });

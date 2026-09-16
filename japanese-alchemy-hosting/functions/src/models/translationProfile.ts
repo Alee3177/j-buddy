@@ -12,8 +12,11 @@
  *     is the trust boundary the P8-D1 audit called for: explain/
  *     explainStreamCallable are public, unauthenticated endpoints, so
  *     arbitrary client-supplied prompt content is never acceptable here.
- *   - Exactly ONE sample profile in P8-D2 ("oriwish-ja-business-v1"), for
- *     architecture validation — NOT a production ORIWISH terminology set.
+ *   - Exactly ONE profile ("oriwish-ja-business-v1"). P8-D2 shipped it as an
+ *     industrial-automation architecture-validation fixture; P8-D4 replaced
+ *     its content wholesale with the real ORIWISH lifestyle/EC terminology
+ *     set (version bumped 1 -> 2 — see the profile definition below and
+ *     docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md).
  */
 
 // --- limits (Section I: enforce maximum profile sizes) ---------------------
@@ -164,24 +167,67 @@ function defineProfile(profile: TranslationProfile): TranslationProfile {
   return freezeProfile(profile);
 }
 
-// --- P8-D2 sample profile ----------------------------------------------
+// --- P8-D4 v0.1 ORIWISH lifestyle/EC profile ----------------------------
 //
-// SAMPLE / FRAMEWORK profile for architecture validation ONLY — NOT a real
-// ORIWISH terminology dataset. "XYZ-300" is a test fixture, not a real
-// ORIWISH product; no real certifications/specs are implied or asserted.
+// Real product domain: Japanese-style textile lifestyle accessories (long
+// wallets, textile pouches, Japanese-pattern goods, gift-oriented consumer
+// products). Supersedes the P8-D2 industrial-automation FRAMEWORK/test
+// fixture (精密滑台/直線模組/線性滑軌, protected XYZ-300/ISO 9001) — that
+// content was never real ORIWISH data and has been removed entirely (P8-D4
+// Section F/N).
+//
+// PROVENANCE (P8-D4 Section A/B): no local ORIWISH source files (product
+// copy, SKU/product records, bilingual copy, imaging) were found in this
+// repository at authoring time. Every entry below is classified
+// GENERIC-EC/GENERIC-TEXTILE (Class B: standard, well-established Japanese
+// e-commerce and textile vocabulary that is directly applicable to the
+// stated product domain) — NONE are marked SOURCE-CONFIRMED (Class A).
+// See docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md for the
+// full provenance table, excluded/uncertain terms, and version policy.
+//
+// Glossary entries for 金襴織/西陣織 are TRANSLATION-CONSISTENCY rules only
+// (if the source text uses this term, preserve it verbatim) — they do not
+// assert that any real ORIWISH product is actually made this way. Brand
+// voice must never add origin/certification/handcraft/material claims the
+// source text does not state (Section H).
 const ORIWISH_JA_BUSINESS_V1 = defineProfile({
   id: "oriwish-ja-business-v1",
-  version: "1",
-  protectedTerms: ["ORIWISH", "XYZ-300", "ISO 9001"],
+  version: "2",
+  protectedTerms: ["ORIWISH"],
   terminologyGlossary: [
-    { sourceTerms: ["精密滑台"], target: "精密ステージ" },
-    { sourceTerms: ["直線模組"], target: "リニアモジュール" },
-    { sourceTerms: ["線性滑軌"], target: "リニアガイド" },
+    { sourceTerms: ["長夾", "長錢包", "長財布"], target: "長財布" },
+    { sourceTerms: ["收納包"], target: "収納ポーチ" },
+    { sourceTerms: ["和風圖案", "和柄"], target: "和柄" },
+    { sourceTerms: ["櫻花圖案", "桜柄"], target: "桜柄" },
+    { sourceTerms: ["櫻花", "桜"], target: "桜" },
+    { sourceTerms: ["金襴織"], target: "金襴織" },
+    { sourceTerms: ["西陣織"], target: "西陣織" },
+    { sourceTerms: ["布料"], target: "生地" },
+    { sourceTerms: ["高雅", "上品"], target: "上品" },
+    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
+    { sourceTerms: ["華麗"], target: "華やか" },
+    { sourceTerms: ["光澤"], target: "光沢" },
+    { sourceTerms: ["質感"], target: "質感" },
+    { sourceTerms: ["色合"], target: "色合い" },
+    { sourceTerms: ["商品說明"], target: "商品説明" },
+    { sourceTerms: ["商品特色"], target: "商品の特徴" },
+    { sourceTerms: ["商品尺寸"], target: "商品サイズ" },
+    { sourceTerms: ["素材"], target: "素材" },
+    { sourceTerms: ["顏色"], target: "カラー" },
+    { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください" },
+    { sourceTerms: ["禮物"], target: "贈り物" },
+    { sourceTerms: ["禮品"], target: "ギフト" },
+    { sourceTerms: ["包包"], target: "バッグ" },
+    { sourceTerms: ["方便攜帶"], target: "持ち運びしやすい" },
+    { sourceTerms: ["日常使用"], target: "日常使い" },
+    { sourceTerms: ["收納"], target: "収納" },
   ],
   brandVoice: {
     description:
-      "專業、精簡、具技術可信度的日文商務語氣，符合日本 B2B 工業產品溝通慣例；" +
-      "避免誇大宣稱，避免消費性廣告式的浮誇用語，維持理性、客觀的技術溝通風格。",
+      "典雅、溫和、貼近日常生活的日系電商語氣，適用於和風布飾、長夾等禮品類商品頁面文案。" +
+      "用詞含蓄、不誇張，避免「絕對」「最高級」「唯一」等宣傳性極端用語，也不得使用其他行銷式浮誇語言；" +
+      "可在不影響事實內容的前提下潤飾文字，使其更自然通順、更貼近日本電商讀者的閱讀習慣；" +
+      "絕對不可無中生有地新增原文沒有提及的材質、產地、認證、手工製作、獎項、耐用性或功效等宣稱。",
   },
 });
 

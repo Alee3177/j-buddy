@@ -398,7 +398,7 @@ describe("explainHandler", () => {
 
       expect(mockChatCompletion.mock.calls[0][0]).toBe(buildTranslationSystemPrompt("business", oriwishProfile));
       expect(result.preStage?.translationProfileId).toBe(ORIWISH_PROFILE_ID);
-      expect(result.preStage?.translationProfileVersion).toBe("1");
+      expect(result.preStage?.translationProfileVersion).toBe("2");
     });
 
     it("an unknown translationProfileId is rejected cleanly before any LLM call", async () => {
@@ -447,10 +447,10 @@ describe("explainHandler", () => {
         .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
 
       await explainHandler(
-        { data: { content: "线性滑轨测试", translationProfileId: ORIWISH_PROFILE_ID } } as any
+        { data: { content: "西陣織長夾測試", translationProfileId: ORIWISH_PROFILE_ID } } as any
       );
 
-      expect(mockChatCompletion.mock.calls[0][0]).toContain("線性滑軌 → リニアガイド");
+      expect(mockChatCompletion.mock.calls[0][0]).toContain("西陣織 → 西陣織");
     });
 
     it("en + profile preserves the protected-term instructions", async () => {
@@ -486,7 +486,7 @@ describe("explainHandler", () => {
       );
 
       const serialized = JSON.stringify(result);
-      expect(serialized).not.toContain("精密ステージ");
+      expect(serialized).not.toContain("上品");
       expect(serialized).not.toContain("terminologyGlossary");
       expect(serialized).not.toContain("protectedTerms");
       expect(serialized).not.toContain("brandVoice");
@@ -526,13 +526,13 @@ describe("explainHandler", () => {
       expect(sentPrompt).toContain("【術語對照表】");
     });
 
-    it("P8-D2 sample sentence: prompt preserves protected terms and glossary mappings end to end", async () => {
-      const sampleSource = "ORIWISH XYZ-300 精密滑台採用線性滑軌，\n適用於自動化設備中的精密定位。\n符合 ISO 9001。";
+    it("P8-D4 real ORIWISH sample sentence: prompt preserves protected terms and glossary mappings end to end", async () => {
+      const sampleSource = "ORIWISH 和風圖案長夾採用金襴織與西陣織的布料，展現高雅又輕量的日式質感。";
       mockChatCompletion
         .mockResolvedValueOnce({
           response: {
             success: true,
-            data: "ORIWISH XYZ-300 精密ステージはリニアガイドを採用し、自動化設備における精密位置決めに適しています。ISO 9001に準拠。",
+            data: "ORIWISHの和柄長財布は金襴織と西陣織の生地を使用し、上品で軽量な和の質感を纏っています。",
           },
         })
         .mockResolvedValueOnce({ response: { success: true, data: "分析結果" } });
@@ -543,12 +543,10 @@ describe("explainHandler", () => {
 
       const [sentPrompt, sentContent] = mockChatCompletion.mock.calls[0];
       expect(sentContent).toBe(sampleSource);
-      expect(sentPrompt).toContain("精密滑台 → 精密ステージ");
-      expect(sentPrompt).toContain("線性滑軌 → リニアガイド");
+      expect(sentPrompt).toContain("和風圖案 / 和柄 → 和柄");
+      expect(sentPrompt).toContain("西陣織 → 西陣織");
       expect(sentPrompt).toContain("- ORIWISH");
-      expect(sentPrompt).toContain("- XYZ-300");
-      expect(sentPrompt).toContain("- ISO 9001");
-      expect(result.preStage?.analysisContent).toContain("ORIWISH XYZ-300");
+      expect(result.preStage?.analysisContent).toContain("ORIWISHの和柄長財布");
     });
   });
 });
