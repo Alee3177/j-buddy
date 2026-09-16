@@ -45,7 +45,7 @@ describe("resolveTranslationProfile", () => {
 
     expect(profile).toBeDefined();
     expect(profile?.id).toBe("oriwish-ja-business-v1");
-    expect(profile?.version).toBe("2");
+    expect(profile?.version).toBe("3");
     expect(Object.isFrozen(profile)).toBe(true);
     expect(Object.isFrozen(profile?.terminologyGlossary)).toBe(true);
     expect(Object.isFrozen(profile?.protectedTerms)).toBe(true);
@@ -73,7 +73,7 @@ describe("resolveTranslationProfile", () => {
   });
 });
 
-describe("the oriwish-ja-business-v1 (P8-D4 v0.1) profile contents", () => {
+describe("the oriwish-ja-business-v1 (P8-D4.1 grounded v0.1) profile contents", () => {
   const profile = resolveTranslationProfile("oriwish-ja-business-v1")!;
 
   it("protects exactly ORIWISH — the P8-D2 industrial fixture identifiers are gone", () => {
@@ -82,7 +82,7 @@ describe("the oriwish-ja-business-v1 (P8-D4 v0.1) profile contents", () => {
     expect(profile.protectedTerms).not.toContain("ISO 9001");
   });
 
-  it("maps the P8-D4 lifestyle/EC glossary terms", () => {
+  it("maps the P8-D4.1 source-confirmed OW_01 glossary terms", () => {
     const bySource = Object.fromEntries(
       profile.terminologyGlossary.map((entry) => [entry.sourceTerms[0], entry.target])
     );
@@ -90,13 +90,44 @@ describe("the oriwish-ja-business-v1 (P8-D4 v0.1) profile contents", () => {
       長夾: "長財布",
       和風圖案: "和柄",
       櫻花圖案: "桜柄",
-      櫻花: "桜",
       金襴織: "金襴織",
       西陣織: "西陣織",
-      布料: "生地",
+      布料: "布地",
       高雅: "上品",
-      輕量: "軽量",
+      外盒: "外箱",
+      顏色款式: "カラーバリエーション",
+      色調: "色合い",
+      尺寸: "サイズ",
+      共10色可選: "全10色から選べる",
     });
+  });
+
+  it("still carries the remaining GENERIC-EC terms (not promoted, but useful)", () => {
+    const bySource = Object.fromEntries(
+      profile.terminologyGlossary.map((entry) => [entry.sourceTerms[0], entry.target])
+    );
+    expect(bySource).toMatchObject({
+      收納包: "収納ポーチ",
+      櫻花: "桜",
+      輕量: "軽量",
+      禮品: "ギフト",
+      商品尺寸: "商品サイズ",
+      素材: "素材",
+      日常使用: "日常使い",
+    });
+  });
+
+  it("no longer maps 布料 to the pre-grounding guess 生地 (corrected to 布地 per owner-verified source)", () => {
+    const entry = profile.terminologyGlossary.find((e) => e.sourceTerms.includes("布料"))!;
+    expect(entry.target).toBe("布地");
+    expect(entry.target).not.toBe("生地");
+  });
+
+  it("no longer contains a 光澤 entry (excluded — contradictory register evidence found in grounding)", () => {
+    const allSources = profile.terminologyGlossary.flatMap((e) => e.sourceTerms);
+    const allTargets = profile.terminologyGlossary.map((e) => e.target);
+    expect(allSources).not.toContain("光澤");
+    expect(allTargets).not.toContain("光沢");
   });
 
   it("contains no P8-D2 industrial-automation terminology", () => {

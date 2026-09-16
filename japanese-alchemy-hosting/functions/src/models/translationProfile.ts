@@ -15,8 +15,12 @@
  *   - Exactly ONE profile ("oriwish-ja-business-v1"). P8-D2 shipped it as an
  *     industrial-automation architecture-validation fixture; P8-D4 replaced
  *     its content wholesale with the real ORIWISH lifestyle/EC terminology
- *     set (version bumped 1 -> 2 — see the profile definition below and
- *     docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md).
+ *     set (version bumped 1 -> 2); P8-D4.1 grounded that content against
+ *     verified ORIWISH source material, correcting one target (布料) and
+ *     removing one contextually-ambiguous entry (光澤) — both materially
+ *     change runtime translation output, so version bumped 2 -> 3. See the
+ *     profile definition below and
+ *     docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md.
  */
 
 // --- limits (Section I: enforce maximum profile sizes) ---------------------
@@ -167,60 +171,76 @@ function defineProfile(profile: TranslationProfile): TranslationProfile {
   return freezeProfile(profile);
 }
 
-// --- P8-D4 v0.1 ORIWISH lifestyle/EC profile ----------------------------
+// --- P8-D4/P8-D4.1 v0.1 ORIWISH lifestyle/EC profile --------------------
 //
 // Real product domain: Japanese-style textile lifestyle accessories (long
 // wallets, textile pouches, Japanese-pattern goods, gift-oriented consumer
 // products). Supersedes the P8-D2 industrial-automation FRAMEWORK/test
 // fixture (精密滑台/直線模組/線性滑軌, protected XYZ-300/ISO 9001) — that
-// content was never real ORIWISH data and has been removed entirely (P8-D4
-// Section F/N).
+// content was never real ORIWISH data and has been removed entirely.
 //
-// PROVENANCE (P8-D4 Section A/B): no local ORIWISH source files (product
-// copy, SKU/product records, bilingual copy, imaging) were found in this
-// repository at authoring time. Every entry below is classified
-// GENERIC-EC/GENERIC-TEXTILE (Class B: standard, well-established Japanese
-// e-commerce and textile vocabulary that is directly applicable to the
-// stated product domain) — NONE are marked SOURCE-CONFIRMED (Class A).
-// See docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md for the
-// full provenance table, excluded/uncertain terms, and version policy.
+// PROVENANCE: P8-D4.1 grounded this profile against verified ORIWISH
+// source material (SKU oriwish_01 + owner-verified bilingual EC copy —
+// see docs/terminology/sources/ORIWISH-OW01-Canonical-Product-Source-v0.1.md).
+// Entries below are grouped SOURCE-CONFIRMED (Class A: directly evidenced
+// by that source) vs GENERIC-EC (Class B: standard Japanese EC/textile
+// vocabulary, safe and useful but not directly evidenced). Full per-term
+// evidence notes and excluded/uncertain terms are in
+// docs/terminology/ORIWISH-JA-EC-Translation-Profile-v0.1.md — this file
+// intentionally does NOT carry provenance metadata into the runtime data
+// structure (would grow the rendered prompt for no translation-time
+// benefit); provenance lives in docs only.
 //
 // Glossary entries for 金襴織/西陣織 are TRANSLATION-CONSISTENCY rules only
 // (if the source text uses this term, preserve it verbatim) — they do not
-// assert that any real ORIWISH product is actually made this way. Brand
+// assert that any real ORIWISH product is actually made this way. Note
+// that OW_01's own material list (金襴織錦布料、布料、金屬配件) does NOT
+// mention 西陣織 — that entry's evidence is the separate owner-verified
+// bilingual copy set, not OW_01's own factual material description. Brand
 // voice must never add origin/certification/handcraft/material claims the
 // source text does not state (Section H).
 const ORIWISH_JA_BUSINESS_V1 = defineProfile({
   id: "oriwish-ja-business-v1",
-  version: "2",
+  version: "3",
   protectedTerms: ["ORIWISH"],
   terminologyGlossary: [
+    // --- SOURCE-CONFIRMED (Class A) ---------------------------------
     { sourceTerms: ["長夾", "長錢包", "長財布"], target: "長財布" },
-    { sourceTerms: ["收納包"], target: "収納ポーチ" },
     { sourceTerms: ["和風圖案", "和柄"], target: "和柄" },
     { sourceTerms: ["櫻花圖案", "桜柄"], target: "桜柄" },
-    { sourceTerms: ["櫻花", "桜"], target: "桜" },
     { sourceTerms: ["金襴織"], target: "金襴織" },
     { sourceTerms: ["西陣織"], target: "西陣織" },
-    { sourceTerms: ["布料"], target: "生地" },
     { sourceTerms: ["高雅", "上品"], target: "上品" },
-    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
     { sourceTerms: ["華麗"], target: "華やか" },
-    { sourceTerms: ["光澤"], target: "光沢" },
     { sourceTerms: ["質感"], target: "質感" },
-    { sourceTerms: ["色合"], target: "色合い" },
+    { sourceTerms: ["收納"], target: "収納" },
+    { sourceTerms: ["包包"], target: "バッグ" },
+    { sourceTerms: ["禮物"], target: "贈り物" },
+    { sourceTerms: ["外盒"], target: "外箱" },
+    { sourceTerms: ["顏色"], target: "カラー" },
+    { sourceTerms: ["顏色款式"], target: "カラーバリエーション" },
+    { sourceTerms: ["色調", "色合"], target: "色合い" },
+    { sourceTerms: ["尺寸"], target: "サイズ" },
+    { sourceTerms: ["布料"], target: "布地" },
+    { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください" },
+    // SKU-specific literal (matches OW_01's confirmed 共10色 color count
+    // exactly) — NOT a general "共N色" pattern. A different color count on
+    // a different SKU simply won't match this entry and falls through to
+    // ordinary translation, still covered by the numeric-preservation rule
+    // in COMMON_TRANSLATION_RULES.
+    { sourceTerms: ["共10色可選"], target: "全10色から選べる" },
+
+    // --- GENERIC-EC (Class B) ---------------------------------------
+    { sourceTerms: ["收納包"], target: "収納ポーチ" },
+    { sourceTerms: ["櫻花", "桜"], target: "桜" },
+    { sourceTerms: ["輕量", "軽量"], target: "軽量" },
+    { sourceTerms: ["禮品"], target: "ギフト" },
     { sourceTerms: ["商品說明"], target: "商品説明" },
     { sourceTerms: ["商品特色"], target: "商品の特徴" },
     { sourceTerms: ["商品尺寸"], target: "商品サイズ" },
     { sourceTerms: ["素材"], target: "素材" },
-    { sourceTerms: ["顏色"], target: "カラー" },
-    { sourceTerms: ["購買前請確認"], target: "ご購入前にご確認ください" },
-    { sourceTerms: ["禮物"], target: "贈り物" },
-    { sourceTerms: ["禮品"], target: "ギフト" },
-    { sourceTerms: ["包包"], target: "バッグ" },
     { sourceTerms: ["方便攜帶"], target: "持ち運びしやすい" },
     { sourceTerms: ["日常使用"], target: "日常使い" },
-    { sourceTerms: ["收納"], target: "収納" },
   ],
   brandVoice: {
     description:

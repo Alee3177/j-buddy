@@ -75,8 +75,8 @@ describe("P8-D4: profile immutability and versioning", () => {
     expect(Object.isFrozen(profile.brandVoice)).toBe(true);
   });
 
-  it("returns the correct v0.1 version string", () => {
-    expect(profile.version).toBe("2");
+  it("returns the correct v0.1 version string (bumped 2 -> 3 by P8-D4.1 source grounding)", () => {
+    expect(profile.version).toBe("3");
   });
 });
 
@@ -103,18 +103,21 @@ describe("P8-D4: factual-preservation rules remain dominant; dimensions/weights/
     expect(prompt.indexOf("術語對照表")).toBeLessThan(prompt.indexOf("品牌語氣調整"));
   });
 
-  it("no numeral-bearing literal entry (e.g. a fixed color count) is baked into the static glossary", () => {
-    // Variable counts (共N色/全N色) are deliberately NOT static glossary
-    // entries — an exact-lexical entry could only ever match one specific
-    // N, which would silently mistranslate every other count. Preserving
-    // the actual digits is handled by the existing, profile-independent
-    // numeric-preservation rule above, not by a glossary literal.
-    for (const entry of profile.terminologyGlossary) {
-      for (const source of entry.sourceTerms) {
-        expect(/[0-9]/.test(source)).toBe(false);
-      }
-      expect(/[0-9]/.test(entry.target)).toBe(false);
-    }
+  it("no numeral-bearing literal entry exists EXCEPT the one P8-D4.1 SKU-specific exception", () => {
+    // Variable counts (共N色/全N色) are deliberately NOT a static glossary
+    // PATTERN — an exact-lexical entry could only ever match one specific
+    // N, which would silently mistranslate every other count. The single
+    // exception (共10色可選 → 全10色から選べる) is a literal convenience
+    // entry justified because it matches OW_01's own confirmed color count
+    // exactly (P8-D4.1 grounding) — it is not a stand-in for arbitrary N.
+    // Any other count still falls through to the profile-independent
+    // numeric-preservation rule, not to this glossary entry.
+    const numeralEntries = profile.terminologyGlossary.filter(
+      (entry) => /[0-9]/.test(entry.target) || entry.sourceTerms.some((s) => /[0-9]/.test(s))
+    );
+    expect(numeralEntries).toHaveLength(1);
+    expect(numeralEntries[0].sourceTerms).toEqual(["共10色可選"]);
+    expect(numeralEntries[0].target).toBe("全10色から選べる");
   });
 });
 
@@ -180,17 +183,23 @@ describe("P8-D4: benchmark cases (Section L) — terminology + facts + register,
     expect(businessPrompt).toContain("金襴織");
   });
 
-  it("Benchmark 3 (GENERIC EC EXAMPLE): size/weight vocabulary terms exist, but no digits are hardcoded into the glossary", () => {
+  it("Benchmark 3 (GENERIC EC EXAMPLE): size/weight vocabulary terms exist; dimensions/weight are never glossary literals", () => {
     expect(profile.terminologyGlossary.some((e) => e.target === "商品サイズ")).toBe(true);
+    expect(profile.terminologyGlossary.some((e) => e.target === "サイズ")).toBe(true);
+    // Dimensions (19x10x1.8cm) and weight (300g) are never glossary
+    // literals — only the color-count SKU exception (see P8-D4.1 test)
+    // carries a digit.
     for (const entry of profile.terminologyGlossary) {
+      if (entry.target === "全10色から選べる") continue;
       expect(/[0-9]/.test(entry.target)).toBe(false);
     }
   });
 
-  it("Benchmark 4 (GENERIC EC EXAMPLE): gift/color-selection vocabulary is present without a hardcoded color count", () => {
+  it("Benchmark 4 (REAL/SOURCE-DERIVED, P8-D4.1): gift/color-selection vocabulary is present, including OW_01's confirmed 10-color count", () => {
     expect(profile.terminologyGlossary.some((e) => e.target === "贈り物")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.target === "ギフト")).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.target === "カラー")).toBe(true);
+    expect(profile.terminologyGlossary.some((e) => e.sourceTerms.includes("共10色可選"))).toBe(true);
     expect(profile.terminologyGlossary.some((e) => e.sourceTerms.includes("共10色"))).toBe(false);
   });
 

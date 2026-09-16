@@ -203,7 +203,7 @@ describe("runMultilingualPreStage", () => {
         "这是一个测试"
       );
       expect(result.translationProfileId).toBe("oriwish-ja-business-v1");
-      expect(result.translationProfileVersion).toBe("2");
+      expect(result.translationProfileVersion).toBe("3");
     });
 
     it("en + profile: profile applies the same way regardless of source language", async () => {
@@ -264,7 +264,7 @@ describe("runMultilingualPreStage", () => {
     });
   });
 
-  describe("P8-D4 real ORIWISH lifestyle/EC sample test input (Section N)", () => {
+  describe("P8-D4.1 real ORIWISH (OW_01) sample test input (Section N)", () => {
     const sampleSource = "ORIWISH 和風圖案長夾採用金襴織與西陣織的布料，展現高雅又輕量的日式質感。";
 
     it("the constructed prompt instructs preservation of every protected term and glossary mapping for the sample sentence", async () => {
@@ -272,7 +272,7 @@ describe("runMultilingualPreStage", () => {
       chatCompletion.mockResolvedValue({
         response: {
           success: true,
-          data: "ORIWISHの和柄長財布は金襴織と西陣織の生地を使用し、上品で軽量な和の質感を纏っています。",
+          data: "ORIWISHの和柄長財布は金襴織と西陣織の布地を使用し、上品で軽量な和の質感を纏っています。",
         },
       });
 
@@ -284,7 +284,7 @@ describe("runMultilingualPreStage", () => {
       expect(sentPrompt).toContain("和風圖案 / 和柄 → 和柄");
       expect(sentPrompt).toContain("金襴織 → 金襴織");
       expect(sentPrompt).toContain("西陣織 → 西陣織");
-      expect(sentPrompt).toContain("布料 → 生地");
+      expect(sentPrompt).toContain("布料 → 布地");
       expect(sentPrompt).toContain("高雅 / 上品 → 上品");
       expect(sentPrompt).toContain("輕量 / 軽量 → 軽量");
     });
